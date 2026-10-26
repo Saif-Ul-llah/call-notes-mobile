@@ -190,7 +190,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 10,
   },
-  discLive: { backgroundColor: colors.navy, borderColor: colors.gold },
+  discLive: { backgroundColor: colors.chrome, borderColor: colors.gold },
   discLabel: { color: colors.canvas, fontSize: 22, fontFamily: fonts.uiBold },
   stop: { width: 36, height: 36, borderRadius: 8, backgroundColor: colors.rec },
   hint: { textAlign: 'center', color: colors.textFaint, fontSize: type.sm, fontFamily: fonts.ui, marginBottom: 14 },

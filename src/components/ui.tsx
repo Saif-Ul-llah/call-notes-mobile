@@ -96,7 +96,7 @@ export function Section({ title, children, style }: { title?: string; children: 
   )
 }
 
-export const speakerColor = (speaker: string) => (speaker === 'Notice' ? colors.warn : speaker === 'Me' ? colors.goldHi : colors.steel)
+export const speakerColor = (speaker: string) => (speaker === 'Notice' ? colors.warn : speaker === 'Me' ? colors.goldHi : colors.sage)
 
 const styles = StyleSheet.create({
   text: { color: colors.text, fontFamily: fonts.ui, fontSize: type.md },

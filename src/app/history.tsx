@@ -7,13 +7,19 @@ import { formatClock } from '../shared/transcript-format'
 import { RecordingBar } from '../components/RecordingBar'
 import { colors, fonts, radius, type } from '../theme'
 
-function relativeDay(ts: number): string {
+/** Heading for the day a call belongs to: Today, Yesterday, a weekday this week, or a date. */
+function dayGroup(ts: number): string {
   const d = new Date(ts)
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-  if (d.toDateString() === new Date().toDateString()) return `Today, ${time}`
-  if (d.toDateString() === new Date(Date.now() - 86400000).toDateString()) return `Yesterday, ${time}`
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const days = Math.floor((startOfToday.getTime() - new Date(d).setHours(0, 0, 0, 0)) / 86400000)
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return d.toLocaleDateString(undefined, { weekday: 'long' })
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
 }
+
+const timeOfDay = (ts: number) => new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 
 export default function History() {
   const { sessionId: liveId, segments: liveSegments } = useRecorder()
@@ -44,11 +50,15 @@ export default function History() {
         data={sessions}
         keyExtractor={(s) => s.id}
         contentContainerStyle={{ paddingBottom: 24 }}
-        ItemSeparatorComponent={() => <View style={styles.sep} />}
+
         ListEmptyComponent={<Text style={styles.empty}>{query ? 'Nothing matches that search.' : 'Your calls will appear here.'}</Text>}
-        renderItem={({ item }) => {
+        renderItem={({ item, index }) => {
           const live = item.id === liveId
+          const group = dayGroup(item.startedAt)
+          const newGroup = index === 0 || dayGroup(sessions[index - 1].startedAt) !== group
           return (
+            <View>
+            {newGroup ? <Text style={[styles.group, index === 0 && { marginTop: 4 }]}>{group}</Text> : <View style={styles.sep} />}
             <Pressable
               accessibilityRole="button"
               style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.raised }]}
@@ -65,10 +75,11 @@ export default function History() {
                 {item.snippet ?? (live ? 'Listening…' : 'No speech recorded')}
               </Text>
               <View style={styles.meta}>
-                <Text style={styles.metaText}>{relativeDay(item.startedAt)}</Text>
+                <Text style={styles.metaText}>{timeOfDay(item.startedAt)}</Text>
                 {item.endedAt && <Text style={styles.metaText}>{formatClock(item.endedAt - item.startedAt)}</Text>}
               </View>
             </Pressable>
+            </View>
           )
         }}
       />
@@ -93,6 +104,7 @@ const styles = StyleSheet.create({
   },
   empty: { color: colors.textFaint, textAlign: 'center', marginTop: 48, fontFamily: fonts.ui },
   sep: { height: 1, backgroundColor: colors.line },
+  group: { color: colors.textFaint, fontSize: type.xs, fontFamily: fonts.uiSemi, marginTop: 18, marginBottom: 2, paddingHorizontal: 4 },
   row: { paddingVertical: 14, paddingHorizontal: 4, gap: 4 },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { flex: 1, color: colors.text, fontSize: type.md, fontFamily: fonts.uiBold },
