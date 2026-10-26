@@ -23,8 +23,8 @@ function Row({ label, hint, value, onChange }: { label: string; hint?: string; v
         value={value}
         onValueChange={onChange}
         accessibilityLabel={label}
-        trackColor={{ true: colors.brassLo, false: colors.rule }}
-        thumbColor={value ? colors.brassHi : colors.ivoryFaint}
+        trackColor={{ true: colors.goldLo, false: colors.line }}
+        thumbColor={value ? colors.goldHi : colors.textFaint}
       />
     </View>
   )
@@ -142,7 +142,7 @@ export default function Settings() {
   const update = (patch: Partial<db.MobileSettings>) => updateSettings(patch)
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.ebony }}>
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
     <RecordingBar />
     <ScrollView style={styles.screen} contentContainerStyle={{ padding: 16, gap: 14, paddingBottom: 40 }}>
       <Section title="Transcription">
@@ -198,15 +198,15 @@ export default function Settings() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ebony },
-  label: { color: colors.ivory, fontSize: type.md, fontFamily: fonts.uiSemi },
-  hint: { color: colors.ivoryFaint, fontSize: type.sm, lineHeight: 20, marginTop: 2, fontFamily: fonts.ui },
+  screen: { flex: 1, backgroundColor: colors.canvas },
+  label: { color: colors.text, fontSize: type.md, fontFamily: fonts.uiSemi },
+  hint: { color: colors.textFaint, fontSize: type.sm, lineHeight: 20, marginTop: 2, fontFamily: fonts.ui },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 16 },
-  meterTrack: { height: 6, borderRadius: 3, backgroundColor: colors.lacquer2, overflow: 'hidden', marginTop: 12 },
-  meterFill: { height: '100%', backgroundColor: colors.brassHi },
+  meterTrack: { height: 6, borderRadius: 3, backgroundColor: colors.raised, overflow: 'hidden', marginTop: 12 },
+  meterFill: { height: '100%', backgroundColor: colors.goldHi },
   stats: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12, rowGap: 10 },
   stat: { width: '50%' },
-  statLabel: { color: colors.ivoryFaint, fontSize: type.xs, fontFamily: fonts.ui },
-  statValue: { color: colors.ivory, fontSize: type.sm, fontFamily: fonts.uiSemi, marginTop: 1 },
+  statLabel: { color: colors.textFaint, fontSize: type.xs, fontFamily: fonts.ui },
+  statValue: { color: colors.text, fontSize: type.sm, fontFamily: fonts.uiSemi, marginTop: 1 },
   error: { color: colors.warn, fontSize: type.sm, marginTop: 12, fontFamily: fonts.ui },
 })

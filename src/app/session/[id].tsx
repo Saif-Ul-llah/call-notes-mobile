@@ -122,13 +122,13 @@ export default function SessionScreen() {
         </View>
 
         {session.status === 'interrupted' && !isLive(live) && (
-          <Button label="Continue this call" variant="brass" onPress={() => void recorder.resume(id).then(() => router.replace('/'))} style={{ marginBottom: 12 }} />
+          <Button label="Continue this call" variant="gold" onPress={() => void recorder.resume(id).then(() => router.replace('/'))} style={{ marginBottom: 12 }} />
         )}
 
         {session.audioPath && !isRecordingThis && <Player uri={session.audioPath} seekRequest={seek} />}
 
         <View style={styles.actions}>
-          <Button label="Share" variant="brass" onPress={chooseShare} style={{ flex: 1 }} />
+          <Button label="Share" variant="gold" onPress={chooseShare} style={{ flex: 1 }} />
           <Button label="Copy text" onPress={() => void Clipboard.setStringAsync(toText(session, segments))} style={{ flex: 1 }} />
           {session.audioPath && !isRecordingThis && <Button label="Audio" onPress={() => void shareAudio(session.audioPath!)} />}
         </View>
@@ -162,24 +162,24 @@ export default function SessionScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ebony },
-  missing: { color: colors.ivoryDim, padding: 24, fontFamily: fonts.ui },
-  title: { color: colors.ivory, fontSize: type.xl, fontFamily: fonts.uiBold, paddingVertical: 4 },
+  screen: { flex: 1, backgroundColor: colors.canvas },
+  missing: { color: colors.textDim, padding: 24, fontFamily: fonts.ui },
+  title: { color: colors.text, fontSize: type.xl, fontFamily: fonts.uiBold, paddingVertical: 4 },
   facts: { flexDirection: 'row', flexWrap: 'wrap', gap: 22, marginTop: 6, marginBottom: 16 },
-  factLabel: { color: colors.ivoryFaint, fontSize: type.xs, fontFamily: fonts.ui },
-  factValue: { color: colors.ivoryDim, fontSize: type.sm, fontFamily: fonts.uiSemi, marginTop: 1 },
+  factLabel: { color: colors.textFaint, fontSize: type.xs, fontFamily: fonts.ui },
+  factValue: { color: colors.textDim, fontSize: type.sm, fontFamily: fonts.uiSemi, marginTop: 1 },
   player: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     padding: 10,
     borderRadius: radius.m,
-    backgroundColor: colors.lacquer,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.rule,
+    borderColor: colors.line,
     marginBottom: 12,
   },
-  playBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.brass, alignItems: 'center', justifyContent: 'center' },
+  playBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.gold, alignItems: 'center', justifyContent: 'center' },
   playIcon: {
     marginLeft: 3,
     width: 0,
@@ -187,20 +187,20 @@ const styles = StyleSheet.create({
     borderLeftWidth: 13,
     borderTopWidth: 8,
     borderBottomWidth: 8,
-    borderLeftColor: colors.ebony,
+    borderLeftColor: colors.canvas,
     borderTopColor: 'transparent',
     borderBottomColor: 'transparent',
   },
   pauseIcon: { flexDirection: 'row', gap: 4 },
-  pauseBar: { width: 4, height: 15, borderRadius: 1, backgroundColor: colors.ebony },
-  progress: { flex: 1, height: 4, borderRadius: 2, backgroundColor: colors.lacquer2, overflow: 'hidden' },
-  progressFill: { height: '100%', backgroundColor: colors.brassHi },
-  playerTime: { color: colors.ivoryDim, fontSize: type.xs, fontFamily: fonts.ui, fontVariant: ['tabular-nums'] },
+  pauseBar: { width: 4, height: 15, borderRadius: 1, backgroundColor: colors.canvas },
+  progress: { flex: 1, height: 4, borderRadius: 2, backgroundColor: colors.raised, overflow: 'hidden' },
+  progressFill: { height: '100%', backgroundColor: colors.goldHi },
+  playerTime: { color: colors.textDim, fontSize: type.xs, fontFamily: fonts.ui, fontVariant: ['tabular-nums'] },
   actions: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  transcript: { marginTop: 14, paddingTop: 16, borderTopWidth: 1, borderTopColor: colors.rule },
-  none: { color: colors.ivoryFaint, textAlign: 'center', paddingVertical: 20, fontFamily: fonts.ui },
+  transcript: { marginTop: 14, paddingTop: 16, borderTopWidth: 1, borderTopColor: colors.line },
+  none: { color: colors.textFaint, textAlign: 'center', paddingVertical: 20, fontFamily: fonts.ui },
   para: { flexDirection: 'row', gap: 12, marginBottom: 18 },
-  paraTs: { color: colors.ivoryFaint, fontSize: type.xs, width: 40, paddingTop: 4, fontFamily: fonts.ui, fontVariant: ['tabular-nums'] },
+  paraTs: { color: colors.textFaint, fontSize: type.xs, width: 40, paddingTop: 4, fontFamily: fonts.ui, fontVariant: ['tabular-nums'] },
   who: { fontSize: type.sm, fontFamily: fonts.uiBold, marginBottom: 2 },
-  paraText: { color: colors.ivory, fontSize: type.read, lineHeight: 27, fontFamily: fonts.read },
+  paraText: { color: colors.text, fontSize: type.read, lineHeight: 27, fontFamily: fonts.read },
 })

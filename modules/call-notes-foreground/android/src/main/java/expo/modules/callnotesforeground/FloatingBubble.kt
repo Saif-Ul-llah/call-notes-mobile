@@ -154,7 +154,7 @@ object FloatingBubble {
   }
 }
 
-/** The bubble itself: brass disc with a mic when idle, ebony disc with a stop square while recording. */
+/** The bubble itself: gold disc with a mic when idle, navy disc with a stop square while recording. */
 class BubbleView(context: Context) : View(context) {
   private val d = context.resources.displayMetrics.density
   private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -186,24 +186,24 @@ class BubbleView(context: Context) : View(context) {
     val cy = height / 2f
     val r = width / 2f - 3 * d
     if (!recording) {
-      fill.color = BRASS
+      fill.color = GOLD
       canvas.drawCircle(cx, cy, r, fill)
-      line.color = BRASS_LO
+      line.color = GOLD_LO
       line.strokeWidth = 2 * d
       canvas.drawCircle(cx, cy, r, line)
       // mic: capsule, holder arc, stem
-      fill.color = EBONY
+      fill.color = GRAPHITE
       rect.set(cx - 4.5f * d, cy - 13 * d, cx + 4.5f * d, cy + 2 * d)
       canvas.drawRoundRect(rect, 4.5f * d, 4.5f * d, fill)
-      line.color = EBONY
+      line.color = GRAPHITE
       line.strokeWidth = 2.2f * d
       rect.set(cx - 9 * d, cy - 11 * d, cx + 9 * d, cy + 7 * d)
       canvas.drawArc(rect, 15f, 150f, false, line)
       canvas.drawLine(cx, cy + 7 * d, cx, cy + 12 * d, line)
     } else {
-      fill.color = LACQUER
+      fill.color = NAVY
       canvas.drawCircle(cx, cy, r, fill)
-      line.color = BRASS
+      line.color = GOLD
       line.strokeWidth = 3 * d
       canvas.drawCircle(cx, cy, r - 1.5f * d, line)
       fill.color = REC
@@ -214,10 +214,10 @@ class BubbleView(context: Context) : View(context) {
   }
 
   private companion object {
-    const val BRASS = 0xFFC9A24B.toInt()
-    const val BRASS_LO = 0xFF9C7A2E.toInt()
-    const val EBONY = 0xFF1A1610.toInt()
-    const val LACQUER = 0xFF231D14.toInt()
-    const val REC = 0xFFE0574F.toInt()
+    const val GOLD = 0xFFC8A24A.toInt()
+    const val GOLD_LO = 0xFF977733.toInt()
+    const val GRAPHITE = 0xFF12151B.toInt()
+    const val NAVY = 0xFF0F1B2E.toInt()
+    const val REC = 0xFFE5484D.toInt()
   }
 }

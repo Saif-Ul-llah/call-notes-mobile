@@ -48,8 +48,8 @@ const styles = StyleSheet.create({
   },
   info: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 36 },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.rec },
-  text: { color: '#F2A29C', fontFamily: fonts.uiSemi, fontSize: type.sm, fontVariant: ['tabular-nums'] },
-  link: { color: colors.brassHi, fontFamily: fonts.uiSemi, fontSize: type.sm, marginLeft: 'auto' },
+  text: { color: colors.recText, fontFamily: fonts.uiSemi, fontSize: type.sm, fontVariant: ['tabular-nums'] },
+  link: { color: colors.goldHi, fontFamily: fonts.uiSemi, fontSize: type.sm, marginLeft: 'auto' },
   stop: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -61,5 +61,5 @@ const styles = StyleSheet.create({
     borderColor: '#6B2C27',
   },
   stopIcon: { width: 10, height: 10, borderRadius: 2, backgroundColor: colors.rec },
-  stopText: { color: '#F2A29C', fontFamily: fonts.uiSemi, fontSize: type.sm },
+  stopText: { color: colors.recText, fontFamily: fonts.uiSemi, fontSize: type.sm },
 })

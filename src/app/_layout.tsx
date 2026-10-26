@@ -30,18 +30,18 @@ export default function RootLayout() {
     initBubble()
   }, [])
 
-  if (!loaded) return <View style={{ flex: 1, backgroundColor: colors.ebony }} />
+  if (!loaded) return <View style={{ flex: 1, backgroundColor: colors.canvas }} />
 
   return (
     <>
       <StatusBar style="light" />
       <Stack
         screenOptions={{
-          headerStyle: { backgroundColor: colors.ebony },
-          headerTintColor: colors.brassHi,
-          headerTitleStyle: { fontFamily: fonts.uiBold, color: colors.ivory },
+          headerStyle: { backgroundColor: colors.navy },
+          headerTintColor: colors.goldHi,
+          headerTitleStyle: { fontFamily: fonts.uiBold, color: colors.text },
           headerShadowVisible: false,
-          contentStyle: { backgroundColor: colors.ebony },
+          contentStyle: { backgroundColor: colors.canvas },
         }}
       >
         <Stack.Screen name="index" options={{ title: 'Call Notes' }} />

@@ -28,13 +28,13 @@ export default function History() {
   )
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.ebony }}>
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       <RecordingBar />
       <View style={styles.screen}>
       <TextInput
         style={styles.search}
         placeholder="Search calls and words"
-        placeholderTextColor={colors.ivoryFaint}
+        placeholderTextColor={colors.textFaint}
         value={query}
         onChangeText={setQuery}
         autoCorrect={false}
@@ -51,14 +51,14 @@ export default function History() {
           return (
             <Pressable
               accessibilityRole="button"
-              style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.lacquer2 }]}
+              style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.raised }]}
               onPress={() => router.push(`/session/${item.id}`)}
             >
               <View style={styles.rowTop}>
                 <Text style={styles.title} numberOfLines={1}>
                   {item.title}
                 </Text>
-                {live && <Text style={[styles.tag, { color: '#F2A29C', backgroundColor: colors.recSoft }]}>Live</Text>}
+                {live && <Text style={[styles.tag, { color: colors.recText, backgroundColor: colors.recSoft }]}>Live</Text>}
                 {item.status === 'interrupted' && <Text style={[styles.tag, { color: colors.warn, backgroundColor: colors.warnSoft }]}>Interrupted</Text>}
               </View>
               <Text style={styles.snippet} numberOfLines={2}>
@@ -78,26 +78,26 @@ export default function History() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ebony, paddingHorizontal: 16, paddingTop: 8 },
+  screen: { flex: 1, backgroundColor: colors.canvas, paddingHorizontal: 16, paddingTop: 8 },
   search: {
-    backgroundColor: colors.lacquer,
-    borderColor: colors.rule,
+    backgroundColor: colors.surface,
+    borderColor: colors.line,
     borderWidth: 1,
     borderRadius: radius.s,
     paddingHorizontal: 14,
     minHeight: 44,
-    color: colors.ivory,
+    color: colors.text,
     fontFamily: fonts.ui,
     fontSize: type.md,
     marginBottom: 10,
   },
-  empty: { color: colors.ivoryFaint, textAlign: 'center', marginTop: 48, fontFamily: fonts.ui },
-  sep: { height: 1, backgroundColor: colors.rule },
+  empty: { color: colors.textFaint, textAlign: 'center', marginTop: 48, fontFamily: fonts.ui },
+  sep: { height: 1, backgroundColor: colors.line },
   row: { paddingVertical: 14, paddingHorizontal: 4, gap: 4 },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  title: { flex: 1, color: colors.ivory, fontSize: type.md, fontFamily: fonts.uiBold },
+  title: { flex: 1, color: colors.text, fontSize: type.md, fontFamily: fonts.uiBold },
   tag: { fontSize: type.xs, fontFamily: fonts.uiBold, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 1, overflow: 'hidden' },
-  snippet: { color: colors.ivoryDim, fontSize: type.sm, lineHeight: 19, fontFamily: fonts.read },
+  snippet: { color: colors.textDim, fontSize: type.sm, lineHeight: 19, fontFamily: fonts.read },
   meta: { flexDirection: 'row', gap: 12 },
-  metaText: { color: colors.ivoryFaint, fontSize: type.xs, fontFamily: fonts.ui, fontVariant: ['tabular-nums'] },
+  metaText: { color: colors.textFaint, fontSize: type.xs, fontFamily: fonts.ui, fontVariant: ['tabular-nums'] },
 })

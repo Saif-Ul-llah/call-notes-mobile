@@ -16,7 +16,7 @@ export function Button({
 }: {
   label: string
   onPress: () => void
-  variant?: 'default' | 'brass' | 'rec' | 'quiet'
+  variant?: 'default' | 'gold' | 'rec' | 'quiet'
   disabled?: boolean
   style?: StyleProp<ViewStyle>
   icon?: ReactNode
@@ -29,7 +29,7 @@ export function Button({
       disabled={disabled}
       style={({ pressed }) => [
         styles.btn,
-        variant === 'brass' && styles.btnBrass,
+        variant === 'gold' && styles.btnGold,
         variant === 'rec' && styles.btnRec,
         variant === 'quiet' && styles.btnQuiet,
         pressed && { opacity: 0.7 },
@@ -38,7 +38,7 @@ export function Button({
       ]}
     >
       {icon}
-      <Text style={[styles.btnText, variant === 'brass' && { color: colors.ebony, fontFamily: fonts.uiBold }, variant === 'rec' && { color: '#F2A29C' }]}>
+      <Text style={[styles.btnText, variant === 'gold' && { color: colors.canvas, fontFamily: fonts.uiBold }, variant === 'rec' && { color: colors.recText }]}>
         {label}
       </Text>
     </Pressable>
@@ -73,12 +73,12 @@ export function Segmented<V extends string>({
 
 export function StatusPill({ status, recovering }: { status: SessionState; recovering?: boolean }) {
   const map: Record<string, { label: string; fg: string; bg: string }> = {
-    recording: { label: 'Listening', fg: '#F2A29C', bg: colors.recSoft },
-    starting: { label: 'Starting', fg: colors.brassHi, bg: colors.lacquer2 },
+    recording: { label: 'Listening', fg: colors.recText, bg: colors.recSoft },
+    starting: { label: 'Starting', fg: colors.goldHi, bg: colors.raised },
     retrying: { label: 'Reconnecting', fg: colors.warn, bg: colors.warnSoft },
-    stopping: { label: 'Saving', fg: colors.brassHi, bg: colors.lacquer2 },
+    stopping: { label: 'Saving', fg: colors.goldHi, bg: colors.raised },
   }
-  const s = map[status] ?? (recovering ? { label: 'Recovering last call', fg: colors.warn, bg: colors.warnSoft } : { label: 'Ready', fg: colors.ok, bg: colors.lacquer2 })
+  const s = map[status] ?? (recovering ? { label: 'Recovering last call', fg: colors.warn, bg: colors.warnSoft } : { label: 'Ready', fg: colors.ok, bg: colors.raised })
   return (
     <View style={[styles.pill, { backgroundColor: s.bg }]} accessibilityRole="text" accessibilityLabel={`Status: ${s.label}`}>
       <View style={[styles.dot, { backgroundColor: status === 'recording' ? colors.rec : s.fg }]} />
@@ -96,10 +96,10 @@ export function Section({ title, children, style }: { title?: string; children: 
   )
 }
 
-export const speakerColor = (speaker: string) => (speaker === 'Notice' ? colors.warn : speaker === 'Me' ? colors.brassHi : colors.sage)
+export const speakerColor = (speaker: string) => (speaker === 'Notice' ? colors.warn : speaker === 'Me' ? colors.goldHi : colors.steel)
 
 const styles = StyleSheet.create({
-  text: { color: colors.ivory, fontFamily: fonts.ui, fontSize: type.md },
+  text: { color: colors.text, fontFamily: fonts.ui, fontSize: type.md },
   btn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -109,34 +109,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: radius.s,
     borderWidth: 1,
-    borderColor: colors.rule,
-    backgroundColor: colors.lacquer2,
+    borderColor: colors.line,
+    backgroundColor: colors.raised,
   },
-  btnBrass: { backgroundColor: colors.brass, borderColor: colors.brassLo },
+  btnGold: { backgroundColor: colors.gold, borderColor: colors.goldLo },
   btnRec: { backgroundColor: 'transparent', borderColor: '#6B2C27' },
   btnQuiet: { backgroundColor: 'transparent', borderColor: 'transparent' },
-  btnText: { color: colors.ivory, fontFamily: fonts.uiSemi, fontSize: type.sm },
+  btnText: { color: colors.text, fontFamily: fonts.uiSemi, fontSize: type.sm },
   segmented: {
     flexDirection: 'row',
-    backgroundColor: colors.lacquer,
+    backgroundColor: colors.surface,
     borderRadius: radius.m,
     borderWidth: 1,
-    borderColor: colors.rule,
+    borderColor: colors.line,
     padding: 3,
   },
   segItem: { flex: 1, minHeight: 38, justifyContent: 'center', borderRadius: radius.s, alignItems: 'center', paddingHorizontal: 4 },
-  segItemActive: { backgroundColor: colors.brass },
-  segText: { color: colors.ivoryDim, fontSize: type.sm, fontFamily: fonts.uiSemi },
-  segTextActive: { color: colors.ebony, fontFamily: fonts.uiBold },
+  segItemActive: { backgroundColor: colors.gold },
+  segText: { color: colors.textDim, fontSize: type.sm, fontFamily: fonts.uiSemi },
+  segTextActive: { color: colors.canvas, fontFamily: fonts.uiBold },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 7, alignSelf: 'flex-start', paddingHorizontal: 11, height: 26, borderRadius: radius.pill },
   dot: { width: 7, height: 7, borderRadius: 4 },
   pillText: { fontSize: type.sm, fontFamily: fonts.uiSemi },
   section: {
-    backgroundColor: colors.lacquer,
+    backgroundColor: colors.surface,
     borderRadius: radius.m,
     borderWidth: 1,
-    borderColor: colors.rule,
+    borderColor: colors.line,
     padding: 16,
   },
-  sectionTitle: { color: colors.brassHi, fontSize: type.md, fontFamily: fonts.uiBold, marginBottom: 12 },
+  sectionTitle: { color: colors.goldHi, fontSize: type.md, fontFamily: fonts.uiBold, marginBottom: 12 },
 })

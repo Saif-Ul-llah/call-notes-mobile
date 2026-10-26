@@ -21,7 +21,7 @@ const LANGUAGES: Array<{ value: LanguageMode; label: string }> = [
 
 const DISC = 132
 
-/** Brass ring that swells with the voice it hears. Subscribes to the level on its own. */
+/** Gold ring that swells with the voice it hears. Subscribes to the level on its own. */
 function LevelRing({ active, warn }: { active: boolean; warn: boolean }) {
   const { level } = useDiagnostics()
   const scale = useRef(new Animated.Value(1)).current
@@ -32,7 +32,7 @@ function LevelRing({ active, warn }: { active: boolean; warn: boolean }) {
   return (
     <Animated.View
       pointerEvents="none"
-      style={[styles.ring, { borderColor: warn ? colors.warn : colors.brassHi, opacity: 0.35 + level * 0.65, transform: [{ scale }] }]}
+      style={[styles.ring, { borderColor: warn ? colors.warn : colors.goldHi, opacity: 0.35 + level * 0.65, transform: [{ scale }] }]}
     />
   )
 }
@@ -166,12 +166,12 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ebony, paddingHorizontal: 16 },
+  screen: { flex: 1, backgroundColor: colors.canvas, paddingHorizontal: 16 },
   headerLinks: { flexDirection: 'row', gap: 18 },
-  headerLink: { color: colors.brassHi, fontSize: type.md, fontFamily: fonts.uiSemi },
+  headerLink: { color: colors.goldHi, fontSize: type.md, fontFamily: fonts.uiSemi },
   top: { gap: 12, paddingTop: 6 },
   statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  timer: { color: colors.ivoryDim, fontFamily: fonts.uiSemi, fontSize: type.md, fontVariant: ['tabular-nums'] },
+  timer: { color: colors.textDim, fontFamily: fonts.uiSemi, fontSize: type.md, fontVariant: ['tabular-nums'] },
   message: { color: colors.warn, fontSize: type.sm, fontFamily: fonts.ui },
   recordWrap: { alignItems: 'center', justifyContent: 'center', height: DISC + 64, marginTop: 6 },
   ring: { position: 'absolute', width: DISC + 22, height: DISC + 22, borderRadius: (DISC + 22) / 2, borderWidth: 3 },
@@ -179,9 +179,9 @@ const styles = StyleSheet.create({
     width: DISC,
     height: DISC,
     borderRadius: DISC / 2,
-    backgroundColor: colors.brass,
+    backgroundColor: colors.gold,
     borderWidth: 2,
-    borderColor: colors.brassLo,
+    borderColor: colors.goldLo,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
@@ -190,25 +190,25 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 10,
   },
-  discLive: { backgroundColor: colors.lacquer, borderColor: colors.brass },
-  discLabel: { color: colors.ebony, fontSize: 22, fontFamily: fonts.uiBold },
+  discLive: { backgroundColor: colors.navy, borderColor: colors.gold },
+  discLabel: { color: colors.canvas, fontSize: 22, fontFamily: fonts.uiBold },
   stop: { width: 36, height: 36, borderRadius: 8, backgroundColor: colors.rec },
-  hint: { textAlign: 'center', color: colors.ivoryFaint, fontSize: type.sm, fontFamily: fonts.ui, marginBottom: 14 },
+  hint: { textAlign: 'center', color: colors.textFaint, fontSize: type.sm, fontFamily: fonts.ui, marginBottom: 14 },
   panel: {
     flex: 1,
-    backgroundColor: colors.lacquer,
+    backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.rule,
+    borderColor: colors.line,
     paddingHorizontal: 14,
   },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, gap: 6 },
-  emptyTitle: { color: colors.ivory, fontSize: type.lg, fontFamily: fonts.uiBold },
-  emptyText: { color: colors.ivoryFaint, fontSize: type.sm, fontFamily: fonts.ui, textAlign: 'center', lineHeight: 20 },
+  emptyTitle: { color: colors.text, fontSize: type.lg, fontFamily: fonts.uiBold },
+  emptyText: { color: colors.textFaint, fontSize: type.sm, fontFamily: fonts.ui, textAlign: 'center', lineHeight: 20 },
   line: { flexDirection: 'row', gap: 12, marginBottom: 12 },
-  ts: { color: colors.ivoryFaint, fontSize: type.xs, width: 40, paddingTop: 4, fontFamily: fonts.ui, fontVariant: ['tabular-nums'] },
-  text: { flex: 1, color: colors.ivory, fontSize: type.read, lineHeight: 26, fontFamily: fonts.read },
+  ts: { color: colors.textFaint, fontSize: type.xs, width: 40, paddingTop: 4, fontFamily: fonts.ui, fontVariant: ['tabular-nums'] },
+  text: { flex: 1, color: colors.text, fontSize: type.read, lineHeight: 26, fontFamily: fonts.read },
   notice: { color: colors.warn, fontSize: type.sm, lineHeight: 20 },
-  preview: { color: colors.ivoryDim, fontFamily: fonts.readItalic },
-  caret: { color: colors.brass, fontFamily: fonts.read },
+  preview: { color: colors.textDim, fontFamily: fonts.readItalic },
+  caret: { color: colors.gold, fontFamily: fonts.read },
 })

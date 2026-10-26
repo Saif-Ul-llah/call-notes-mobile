@@ -1,23 +1,29 @@
-// Call Notes — "ebony & brass" (same tokens as desktop/src/renderer/src/theme.css).
+// Call Notes theme: graphite canvas, navy chrome, muted gold accent
+// (same tokens as desktop/src/renderer/src/theme.css).
 
 export const colors = {
-  ebony: '#1A1610',
-  lacquer: '#231D14',
-  lacquer2: '#2C251A',
-  rule: '#3A3123',
-  ruleStrong: '#54472F',
-  brass: '#C9A24B',
-  brassHi: '#E2C27A',
-  brassLo: '#9C7A2E',
-  ivory: '#F1E8D6',
-  ivoryDim: '#C4B89E',
-  ivoryFaint: '#958A73',
-  sage: '#A9C3B6',
-  rec: '#E0574F',
-  recSoft: '#33191A',
-  warn: '#E8A33D',
-  warnSoft: '#33260F',
-  ok: '#86BD85',
+  canvas: '#12151B',
+  surface: '#191D25',
+  raised: '#20252F',
+  line: '#2A303C',
+  lineStrong: '#3A4252',
+  navy: '#0F1B2E',
+  navyRaised: '#16263F',
+  navySelect: '#1C3253',
+  navyLine: '#24395A',
+  gold: '#C8A24A',
+  goldHi: '#DEC07E',
+  goldLo: '#977733',
+  text: '#E7E9EE',
+  textDim: '#AAB1BE',
+  textFaint: '#7D8696',
+  steel: '#8EB4DA',
+  rec: '#E5484D',
+  recSoft: '#3A1C20',
+  recText: '#F4A6A8',
+  warn: '#E3A33B',
+  warnSoft: '#33270F',
+  ok: '#4FB685',
 }
 
 export const fonts = {
