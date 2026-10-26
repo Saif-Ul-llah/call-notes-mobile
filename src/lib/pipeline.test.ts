@@ -66,6 +66,7 @@ describe.skipIf(!enabled)('live pipeline on real speech', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require(NATIVE!)
     const whisper = await new mod.WhisperContext({ filePath: MODEL, useGpu: false })
+    const preview = await new mod.WhisperContext({ filePath: MODEL, useGpu: false })
     const vad = await new mod.WhisperVadContext({ filePath: VAD, useGpu: false, nThreads: 1 })
 
     // build a "call": 1 s quiet, then each clip followed by 1.5 s quiet
@@ -89,7 +90,7 @@ describe.skipIf(!enabled)('live pipeline on real speech', () => {
     const finals: Array<{ atMs: number; job: SliceJob; text: string }> = []
     const errors: unknown[] = []
     const queue = new EngineQueue(
-      { getContexts: async () => ({ whisper, vad }), decodeOptions: (kind, ms) => ({ ...decodeOptions('roman', kind, ms), maxThreads: 4 }) },
+      { getContexts: async () => ({ whisper, vad, preview }), decodeOptions: (kind, ms) => decodeOptions('roman', kind, ms) },
       {
         onFinal: (job, text) => finals.push({ atMs: audioNow(), job, text }),
         onPartial: (job, text) => partials.push({ atMs: audioNow(), job, text }),
@@ -109,6 +110,7 @@ describe.skipIf(!enabled)('live pipeline on real speech', () => {
     for (const ev of slicer.flush()) queue.pushFinal({ startMs: ev.startMs, endMs: ev.endMs, pcm: ev.audio })
     await queue.drain()
     await whisper.release()
+    await preview.release()
     await vad.release()
 
     // ---- report

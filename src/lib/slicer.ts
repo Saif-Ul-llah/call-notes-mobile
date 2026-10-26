@@ -18,19 +18,31 @@ export interface SlicerOptions {
   minRms: number
   /** Speech when RMS > noiseFloor * ratio. */
   speechRatio: number
+  /** Frames used to measure the background before detecting speech. */
+  warmupMs: number
+  /**
+   * Speech is bursty; steady sound (fan hiss, a phone's auto-gain noise) is not.
+   * "Speech" whose loudness varies less than this (coefficient of variation over
+   * `steadyWindowMs`) is treated as background noise.
+   */
+  steadyCv: number
+  steadyWindowMs: number
 }
 
 export const DEFAULT_SLICER_OPTIONS: SlicerOptions = {
   sampleRate: 16000,
   frameMs: 30,
-  minSilenceMs: 550,
-  maxSliceMs: 8000,
+  minSilenceMs: 450,
+  maxSliceMs: 6000,
   minSpeechMs: 300,
   preRollMs: 300,
   tailMs: 250,
-  partialEveryMs: 900,
+  partialEveryMs: 700,
   minRms: 0.004,
   speechRatio: 2.5,
+  warmupMs: 300,
+  steadyCv: 0.2,
+  steadyWindowMs: 1500,
 }
 
 export interface SliceEvent {
@@ -56,6 +68,8 @@ export class Slicer {
   private slice: Int16Array[] = []
   private sliceStartSample = 0
   private lastPartialAtSample = 0
+  private warmup: number[] = []
+  private recentLevels: number[] = []
 
   constructor(options: Partial<SlicerOptions> = {}) {
     this.opts = { ...DEFAULT_SLICER_OPTIONS, ...options }
@@ -110,6 +124,17 @@ export class Slicer {
 
   private processFrame(frame: Int16Array): SliceEvent | null {
     const level = Slicer.rms(frame)
+
+    // calibrate on the first few frames: never start a slice before we know the background
+    if (this.warmup.length < this.framesFor(this.opts.warmupMs)) {
+      this.warmup.push(level)
+      const sorted = [...this.warmup].sort((a, b) => a - b)
+      this.noiseFloor = Math.max(this.opts.minRms / 2, sorted[Math.floor(sorted.length / 2)])
+      this.preRoll.push(frame)
+      if (this.preRoll.length > this.framesFor(this.opts.preRollMs)) this.preRoll.shift()
+      return null
+    }
+
     const threshold = Math.max(this.opts.minRms, this.noiseFloor * this.opts.speechRatio)
     const isSpeech = level > threshold
 
@@ -134,6 +159,19 @@ export class Slicer {
     }
 
     this.slice.push(frame)
+    this.recentLevels.push(level)
+    if (this.recentLevels.length > this.framesFor(this.opts.steadyWindowMs)) this.recentLevels.shift()
+    if (this.isSteady()) {
+      // it was background noise all along: learn its level and drop the slice
+      this.noiseFloor = this.recentLevels.reduce((a, b) => a + b, 0) / this.recentLevels.length
+      this.inSpeech = false
+      this.slice = []
+      this.recentLevels = []
+      this.speechRun = 0
+      this.silenceRun = 0
+      this.speechFrames = 0
+      return null
+    }
     if (isSpeech) {
       this.speechFrames++
       this.silenceRun = 0
@@ -150,7 +188,9 @@ export class Slicer {
       return this.closeSlice(endSample - dropFrames * this.frameSamples)
     }
     if (sliceMs >= this.opts.maxSliceMs) {
+      const levels = this.recentLevels
       const ev = this.closeSlice(endSample)
+      this.recentLevels = levels
       // speech continues straight into the next slice
       this.inSpeech = true
       this.slice = []
@@ -167,7 +207,16 @@ export class Slicer {
     return null
   }
 
+  private isSteady(): boolean {
+    const n = this.recentLevels.length
+    if (n < this.framesFor(this.opts.steadyWindowMs)) return false
+    const mean = this.recentLevels.reduce((a, b) => a + b, 0) / n
+    const variance = this.recentLevels.reduce((a, b) => a + (b - mean) ** 2, 0) / n
+    return Math.sqrt(variance) / Math.max(1e-9, mean) < this.opts.steadyCv
+  }
+
   private closeSlice(endSample: number): SliceEvent | null {
+    this.recentLevels = []
     const audio = Slicer.concat(this.slice)
     const speechMs = this.speechFrames * this.opts.frameMs
     const startMs = this.ms(this.sliceStartSample)

@@ -170,7 +170,8 @@ class Recorder {
     this.set({ sessionId, startedAt: session.startedAt, segments: [], previews: {}, message: null })
     this.fire('START')
     this.appStateSub = AppState.addEventListener('change', (s) => this.onAppState(s))
-    log('info', `session ${sessionId} starting (${settings.language})`)
+    const c = Platform.constants as unknown as Record<string, unknown>
+    log('info', `session ${sessionId} starting (${settings.language}) on ${Platform.OS} ${c.Release ?? Platform.Version} ${[c.Brand, c.Model].filter(Boolean).join(' ')}`.trim())
 
     try {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: true, interruptionMode: 'mixWithOthers' })
@@ -276,13 +277,17 @@ class Recorder {
     cur.slicer = null
   }
 
+  private partialCount = 0
+
   private onPartial(cur: Active, job: SliceJob, text: string, latencyMs: number) {
     if (this.cur !== cur) return
     updateDiagnostics({ lastPartialMs: latencyMs })
+    if (this.partialCount++ % 10 === 0) log('info', `preview: ${Math.round(job.pcm.length / 16)} ms audio, ready after ${latencyMs} ms`)
     if (text) this.set({ previews: { ...this.state.previews, [job.startMs]: text } })
   }
 
   private onFinal(cur: Active, job: SliceJob, text: string, raw: string, latencyMs: number) {
+    log('info', `line: ${job.endMs - job.startMs} ms audio, ready ${latencyMs} ms after the pause${text ? '' : ' (no speech)'}`)
     if (cur.engineErrors > 0 && this.cur === cur && this.state.status === 'recording') this.set({ message: null })
     cur.engineErrors = 0
     updateDiagnostics({ lastFinalMs: latencyMs, finalsQueued: cur.queue.pending })

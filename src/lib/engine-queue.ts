@@ -30,7 +30,8 @@ export interface QueueHandlers {
 }
 
 export interface QueueDeps {
-  getContexts(): Promise<{ whisper: WhisperLike; vad: VadLike }>
+  /** `preview` is optional: without it previews share the line context (one job at a time) */
+  getContexts(): Promise<{ whisper: WhisperLike; vad: VadLike; preview?: WhisperLike }>
   /** whisper options for a job kind (language, beam size, encoder window…) */
   decodeOptions(kind: 'final' | 'partial', audioMs: number): Record<string, unknown>
 }
@@ -40,16 +41,19 @@ const toBuffer = (pcm: Int16Array): ArrayBuffer => pcm.slice().buffer as ArrayBu
 export class EngineQueue {
   private finals: Array<SliceJob & { queuedAt: number }> = []
   private partial: (SliceJob & { queuedAt: number }) | null = null
-  private running = false
+  private finalsRunning = false
+  private previewRunning = false
   private closed = false
   private idleWaiters: Array<() => void> = []
   /** slices whose final was queued: late partials for them are ignored */
   private finalized = new Set<number>()
+  /** true once we know previews have a context of their own */
+  private separatePreview = false
 
   constructor(private deps: QueueDeps, private handlers: QueueHandlers) {}
 
   get pending(): number {
-    return this.finals.length
+    return this.finals.length + (this.finalsRunning ? 1 : 0)
   }
 
   pushFinal(job: SliceJob): void {
@@ -57,18 +61,18 @@ export class EngineQueue {
     this.finalized.add(job.startMs)
     if (this.partial?.startMs === job.startMs) this.partial = null
     this.finals.push({ ...job, queuedAt: Date.now() })
-    void this.pump()
+    void this.runFinals()
   }
 
   offerPartial(job: SliceJob): void {
     if (this.closed || this.finalized.has(job.startMs)) return
     this.partial = { ...job, queuedAt: Date.now() } // newest preview replaces an older one
-    void this.pump()
+    void this.runPreviews()
   }
 
   /** Resolves once every queued final has been transcribed. */
   drain(): Promise<void> {
-    if (!this.running && this.finals.length === 0) return Promise.resolve()
+    if (!this.finalsRunning && this.finals.length === 0) return Promise.resolve()
     return new Promise((resolve) => this.idleWaiters.push(resolve))
   }
 
@@ -77,24 +81,34 @@ export class EngineQueue {
     this.partial = null
   }
 
-  private async pump(): Promise<void> {
-    if (this.running) return
-    this.running = true
+  private async runFinals(): Promise<void> {
+    if (this.finalsRunning) return
+    this.finalsRunning = true
+    try {
+      for (let job = this.finals.shift(); job; job = this.finals.shift()) await this.runFinal(job)
+    } finally {
+      this.finalsRunning = false
+      this.idleWaiters.splice(0).forEach((r) => r())
+      // previews that waited for a shared context can go now
+      if (this.partial) void this.runPreviews()
+    }
+  }
+
+  private async runPreviews(): Promise<void> {
+    if (this.previewRunning) return
+    // with one shared context a preview waits for lines (lines matter more)
+    if (!this.separatePreview && this.finalsRunning) return
+    this.previewRunning = true
     try {
       for (;;) {
-        const final = this.finals.shift()
-        if (final) {
-          await this.runFinal(final)
-          continue
-        }
-        const partial = this.partial
+        const job = this.partial
         this.partial = null
-        if (!partial || this.closed) break
-        await this.runPartial(partial)
+        if (!job || this.closed) break
+        await this.runPartial(job)
+        if (!this.separatePreview && this.finalsRunning) break
       }
     } finally {
-      this.running = false
-      if (this.finals.length === 0) this.idleWaiters.splice(0).forEach((r) => r())
+      this.previewRunning = false
     }
   }
 
@@ -117,7 +131,9 @@ export class EngineQueue {
 
   private async runPartial(job: SliceJob & { queuedAt: number }): Promise<void> {
     try {
-      const { whisper } = await this.deps.getContexts()
+      const ctx = await this.deps.getContexts()
+      this.separatePreview = !!ctx.preview
+      const whisper = ctx.preview ?? ctx.whisper
       const { result } = await whisper.transcribeData(toBuffer(job.pcm), this.deps.decodeOptions('partial', job.pcm.length / 16)).promise
       // the slice may have been finalized while this preview was decoding
       if (!this.finalized.has(job.startMs)) this.handlers.onPartial(job, cleanTranscript(result), Date.now() - job.queuedAt)

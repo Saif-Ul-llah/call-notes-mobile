@@ -3,7 +3,19 @@ import { Slicer } from './slicer'
 
 const SR = 16000
 
+/** Speech-like test signal: a voiced tone whose loudness rises and falls ~4 times a second (syllables). */
 function tone(ms: number, amp = 0.3, freq = 220): Int16Array {
+  const n = Math.round((SR * ms) / 1000)
+  const out = new Int16Array(n)
+  for (let i = 0; i < n; i++) {
+    const syllable = 0.55 + 0.45 * Math.sin((2 * Math.PI * 4 * i) / SR)
+    out[i] = Math.round(Math.sin((2 * Math.PI * freq * i) / SR) * amp * syllable * 32767)
+  }
+  return out
+}
+
+/** Steady tone at constant loudness: a hum, not speech. */
+function hum(ms: number, amp = 0.05, freq = 120): Int16Array {
   const n = Math.round((SR * ms) / 1000)
   const out = new Int16Array(n)
   for (let i = 0; i < n; i++) out[i] = Math.round(Math.sin((2 * Math.PI * freq * i) / SR) * amp * 32767)
@@ -59,6 +71,20 @@ describe('Slicer', () => {
     const slicer = new Slicer()
     const events = feed(slicer, [noise(3000, 0.02), noise(3000, 0.02)])
     expect(events.filter((e) => e.type === 'final')).toHaveLength(0)
+  })
+
+  it('ignores loud steady noise from the very first moment (phone auto-gain hiss)', () => {
+    const slicer = new Slicer({ maxSliceMs: 6000 })
+    const events = feed(slicer, [noise(8000, 0.03)])
+    expect(events.filter((e) => e.type === 'final')).toHaveLength(0)
+  })
+
+  it('learns a steady hum that starts after silence and still finds speech over it', () => {
+    const slicer = new Slicer({ maxSliceMs: 6000 })
+    const events = feed(slicer, [noise(1000), hum(4000), tone(1500, 0.4), hum(1500)])
+    const finals = events.filter((e) => e.type === 'final')
+    expect(finals).toHaveLength(1)
+    expect(finals[0].startMs).toBeGreaterThan(4500)
   })
 
   it('flush closes an open slice', () => {

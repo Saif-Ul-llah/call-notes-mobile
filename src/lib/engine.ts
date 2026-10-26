@@ -6,6 +6,7 @@ import { backoffDelay } from '../shared/session-state'
 import { CROP_PAD_AFTER_MS, CROP_PAD_BEFORE_MS } from '../shared/models'
 import type { LanguageMode } from '../shared/types'
 import { cropToSpeech } from './crop'
+import { log } from './diagnostics'
 import { decodeOptions } from './decode'
 
 export { decodeOptions } from './decode'
@@ -15,7 +16,10 @@ const MODEL_ASSET = require('../../assets/models/ggml-hinglish-swift-q5_1.bin')
 const VAD_ASSET = require('../../assets/models/ggml-silero-v5.1.2.bin')
 
 export interface Contexts {
+  /** finishes lines (accurate settings) */
   whisper: WhisperContext
+  /** live previews run on their own context so they never wait behind a line */
+  preview: WhisperContext
   vad: WhisperVadContext
 }
 
@@ -32,9 +36,12 @@ export function getContexts(): Promise<Contexts> {
     let lastError: unknown
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
+        const t = Date.now()
         const whisper = await initWhisper({ filePath: MODEL_ASSET, useGpu: true })
+        const preview = await initWhisper({ filePath: MODEL_ASSET, useGpu: true })
         const vad = await initWhisperVad({ filePath: VAD_ASSET, useGpu: false, nThreads: 1 })
-        contexts = { whisper, vad }
+        contexts = { whisper, preview, vad }
+        log('info', `speech model loaded in ${Date.now() - t} ms`)
         return contexts
       } catch (err) {
         lastError = err
@@ -52,7 +59,7 @@ export function getContexts(): Promise<Contexts> {
 export async function resetContexts(): Promise<void> {
   const old = contexts
   contexts = null
-  await Promise.allSettled([old?.whisper.release(), old?.vad.release()])
+  await Promise.allSettled([old?.whisper.release(), old?.preview.release(), old?.vad.release()])
 }
 
 /**
