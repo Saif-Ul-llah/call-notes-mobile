@@ -1,0 +1,13 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "whisper.rn": ["./node_modules/whisper.rn/lib/typescript/index.d.ts"],
+      "whisper.rn/src/*": ["./node_modules/whisper.rn/lib/typescript/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
+  "exclude": ["node_modules"]
+}
