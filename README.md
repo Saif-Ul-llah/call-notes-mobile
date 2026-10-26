@@ -64,6 +64,16 @@ npm run typecheck
 npx expo-doctor
 ```
 
+### Real-speech pipeline test (optional)
+
+This runs the live pipeline (slicer → engine queue → romanizer) on the clips in `test-audio/` at real-time pace, using whisper.cpp through a whisper.node addon:
+
+```bash
+PIPELINE=1 WHISPER_NATIVE=../call-notes-desktop/native/linux-x64-avx2/index.node npx vitest run src/lib/pipeline.test.ts
+```
+
+whisper.rn is patched with `patch-package` (`patches/`) so live previews can shorten whisper's encoder window (`audioCtx`), which makes them about 4× faster.
+
 ### Day-to-day git workflow
 
 ```bash

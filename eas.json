@@ -15,10 +15,12 @@
       "android": {
         "buildType": "apk"
       },
-      "credentialsSource": "local"
+      "credentialsSource": "local",
+      "autoIncrement": true
     },
     "production": {
-      "credentialsSource": "local"
+      "credentialsSource": "local",
+      "autoIncrement": true
     }
   }
 }

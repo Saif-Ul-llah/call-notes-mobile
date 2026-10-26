@@ -55,6 +55,7 @@ const toSession = (r: Row): StoredSession => ({
   dir: r.dir as string,
   parentId: (r.parent_id as string | null) ?? null,
   segmentCount: (r.segment_count as number | undefined) ?? undefined,
+  snippet: (r.snippet as string | null | undefined) ?? undefined,
   audioPath: (r.audio_path as string | null) ?? null,
   keepAudio: r.keep_audio === 1,
 })
@@ -98,7 +99,10 @@ export function getSession(id: string): StoredSession | null {
 
 export function listSessions(query = ''): StoredSession[] {
   const q = query.trim()
-  const base = `SELECT s.*, (SELECT COUNT(*) FROM segments g WHERE g.session_id = s.id) AS segment_count FROM sessions s`
+  const base = `SELECT s.*,
+    (SELECT COUNT(*) FROM segments g WHERE g.session_id = s.id AND g.speaker != 'Notice') AS segment_count,
+    (SELECT g.text FROM segments g WHERE g.session_id = s.id AND g.speaker != 'Notice' ORDER BY g.start_ms LIMIT 1) AS snippet
+    FROM sessions s`
   if (!q) return db.getAllSync<Row>(`${base} ORDER BY s.started_at DESC LIMIT 300`).map(toSession)
   const like = `%${q.replace(/[%_\\]/g, (m) => '\\' + m)}%`
   return db

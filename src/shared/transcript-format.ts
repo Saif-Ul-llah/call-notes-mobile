@@ -73,7 +73,7 @@ export function toSrt(segments: Segment[]): string {
 }
 
 export function toTranscriptDoc(session: SessionInfo, segments: Segment[]): TranscriptDoc {
-  const { dir: _dir, segmentCount: _count, ...meta } = session
+  const { dir: _dir, segmentCount: _count, snippet: _snippet, ...meta } = session
   return {
     version: 1,
     session: meta,

@@ -1,0 +1,11 @@
+{
+  "source": "Reference transcripts from the Oriserve/Whisper-Hindi2Hinglish-Swift model card (Apache-2.0)",
+  "clips": {
+    "f89b6428-c58a-4355-ad63-0752b69f2d30.wav": "vah bas din mein kitni baar chalti hai?",
+    "09cf2547-9d09-4914-926a-cf2043549c15.wav": "salmaan ki image se prabhaavit hote hain is company ke share bhaav jaane kaise?",
+    "6f7df89f-91a7-4cbd-be43-af7bce71a34b.wav": "vah roya aur aur roya.",
+    "969bede5-d816-461b-9bf2-bd115e098439.wav": "helmet na pahnne se bhaarat mein har gante hoti hai chaar logon ki maut.",
+    "cef43941-72c9-4d28-88dd-cb62808dc056.wav": "usne mujhe chithi ka javaab na dene ke lie daanta.",
+    "b27d49fe-fced-4a17-9887-7bfbc5d4a899.wav": "puraana shahar divaaron se ghera hua hai."
+  }
+}

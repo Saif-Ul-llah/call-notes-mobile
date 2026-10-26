@@ -1,77 +1,72 @@
 // Mobile transcription session controller.
 //
-//   mic (expo-audio AudioStream) --tap--> WAV on disk (the session timeline)
-//                                 \-----> whisper.rn RealtimeTranscriber (Silero VAD slices)
-//                                          -> romanizer -> SQLite segments -> UI
+//   mic (expo-audio AudioStream) -> WAV on disk (the session timeline)
+//                                -> Slicer (speech slices, partial snapshots ~1 s)
+//                                -> EngineQueue (whisper.rn: greedy previews, beam finals)
+//                                -> romanizer -> SQLite segments -> UI
 //
 // Reliability: the WAV is written before transcription, so a crash loses no audio.
-// On failure the capture/transcriber restarts with exponential backoff (silence is
-// written for the gap to keep timestamps aligned); on next launch an interrupted
-// session's untranscribed tail is transcribed from the WAV.
+// On failure capture restarts with exponential backoff (silence is written for the
+// gap to keep timestamps aligned); on next launch an interrupted session's
+// untranscribed tail is transcribed from the WAV.
 
 import { AppState, type AppStateStatus, Platform } from 'react-native'
 import { File } from 'expo-file-system'
 import { requestNotificationPermissionsAsync, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio'
-import { RealtimeTranscriber, RingBufferVad } from 'whisper.rn/src/realtime-transcription'
-import type { RealtimeTranscribeEvent } from 'whisper.rn/src/realtime-transcription/types'
-import { cleanTranscript } from '../shared/romanizer'
 import { LIVE_STATES, backoffDelay, canTransition, transition, type SessionEvent, type SessionState } from '../shared/session-state'
 import { sessionTitle } from '../shared/transcript-format'
 import { MOBILE_MODEL } from '../shared/models'
 import type { Segment } from '../shared/types'
 import * as db from './db'
-import { getContexts, resetContexts, transcribeOptions, transcribePcm } from './engine'
-import { ExpoAudioStream } from './expo-audio-stream'
+import { log, updateDiagnostics } from './diagnostics'
+import { decodeOptions, getContexts, resetContexts, transcribePcm } from './engine'
+import { EngineQueue, type SliceJob } from './engine-queue'
 import { newSessionDir, WavWriter, writeTranscriptFiles } from './files'
+import { Mic } from './mic'
+import { Slicer } from './slicer'
 import { startForegroundService, stopForegroundService, updateForegroundService } from './background'
 import { BYTES_PER_MS, gapFillBytes, tailWindows } from './wav'
 
 const SPEAKER = 'Speaker'
 const STALL_MS = 8000
-const MAX_TRANSCRIBE_ERRORS = 3
+const MAX_ENGINE_ERRORS = 3
 
 export interface RecorderState {
   status: SessionState
   sessionId: string | null
   startedAt: number | null
   segments: Segment[]
-  partial: string | null
+  /** live previews of slices still being spoken / finalized, keyed by slice start */
+  previews: Record<number, string>
   message: string | null
   /** recovery of interrupted sessions in progress */
   recovering: boolean
 }
 
-interface SliceTrack {
-  startMs: number
-  text: string
-  raw: string
-  durationMs: number
-  finalized: boolean
-}
-
 interface Active {
   session: db.StoredSession
   wav: WavWriter
-  transcriber: RealtimeTranscriber | null
-  /** increments on every transcriber restart; slice indexes restart from 0 each run */
-  run: number
-  slices: Map<number, SliceTrack>
+  mic: Mic | null
+  slicer: Slicer | null
+  /** WAV position (ms) where the current slicer's timeline starts */
+  sliceOffsetMs: number
+  queue: EngineQueue
   lastDataAt: number
   failedAt: number | null
   attempt: number
-  transcribeErrors: number
+  engineErrors: number
   retryTimer: ReturnType<typeof setTimeout> | null
   stallTimer: ReturnType<typeof setInterval>
   writeTimer: ReturnType<typeof setTimeout> | null
   showPartials: boolean
 }
 
-let id = 0
-const uuid = () => `${Date.now().toString(36)}-${(id++).toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+let seq = 0
+const uuid = () => `${Date.now().toString(36)}-${(seq++).toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 
 class Recorder {
   private state: RecorderState = {
-    status: 'idle', sessionId: null, startedAt: null, segments: [], partial: null, message: null, recovering: false,
+    status: 'idle', sessionId: null, startedAt: null, segments: [], previews: {}, message: null, recovering: false,
   }
   private listeners = new Set<() => void>()
   private cur: Active | null = null
@@ -132,33 +127,46 @@ class Recorder {
     }
     db.createSession(session)
 
-    this.cur = {
+    const cur: Active = {
       session,
       wav: new WavWriter(wavFile),
-      transcriber: null,
-      run: 0,
-      slices: new Map(),
+      mic: null,
+      slicer: null,
+      sliceOffsetMs: 0,
+      queue: null as unknown as EngineQueue,
       lastDataAt: Date.now(),
       failedAt: null,
       attempt: 0,
-      transcribeErrors: 0,
+      engineErrors: 0,
       retryTimer: null,
       stallTimer: setInterval(() => this.checkStall(), 2000),
       writeTimer: null,
       showPartials: settings.showPartials,
     }
-    this.set({ sessionId, startedAt: session.startedAt, segments: [], partial: null, message: null })
+    cur.queue = new EngineQueue(
+      { getContexts, decodeOptions: (kind, ms) => decodeOptions(session.language, kind, ms) },
+      {
+        onFinal: (job, text, raw, ms) => this.onFinal(cur, job, text, raw, ms),
+        onPartial: (job, text, ms) => this.onPartial(cur, job, text, ms),
+        onError: (err, kind) => this.onEngineError(cur, err, kind),
+      },
+    )
+    this.cur = cur
+    this.set({ sessionId, startedAt: session.startedAt, segments: [], previews: {}, message: null })
     this.fire('START')
     this.appStateSub = AppState.addEventListener('change', (s) => this.onAppState(s))
+    log('info', `session ${sessionId} starting (${settings.language})`)
 
     try {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: true, interruptionMode: 'mixWithOthers' })
       await startForegroundService()
     } catch (err) {
       // not fatal: transcription still works while the app is in the foreground
-      this.set({ message: `Background mode unavailable: ${err}` })
+      log('warn', `background mode unavailable: ${err}`)
     }
-    await this.runTranscriber()
+    // load the model while the mic starts, so the first slice doesn't wait for it
+    void getContexts().catch((err) => log('error', `model load failed: ${err}`))
+    await this.startCapture(cur)
   }
 
   async stop(): Promise<void> {
@@ -168,17 +176,20 @@ class Recorder {
     this.set({ message: 'Saving…' })
     clearInterval(cur.stallTimer)
     if (cur.retryTimer) clearTimeout(cur.retryTimer)
-    // let the transcriber finish its queue (bounded: the audio is safe on disk anyway)
-    await Promise.race([this.teardownTranscriber(cur), new Promise((r) => setTimeout(r, 20000))])
-    this.finalizeAllSlices(cur)
+    await cur.mic?.stop()
+    cur.mic = null
+    this.flushSlicer(cur)
+    // let queued slices finish (bounded: the audio is safe on disk anyway)
+    await Promise.race([cur.queue.drain(), new Promise((r) => setTimeout(r, 20000))])
+    cur.queue.close()
     cur.wav.close()
 
-    const endedAt = Date.now()
-    db.updateSession(cur.session.id, { endedAt })
+    db.updateSession(cur.session.id, { endedAt: Date.now() })
     this.cur = null
     this.appStateSub?.remove()
     this.appStateSub = null
     await stopForegroundService().catch(() => undefined)
+    updateDiagnostics({ speaking: false, level: 0 })
 
     const saved = db.getSession(cur.session.id)
     if (saved) {
@@ -188,8 +199,9 @@ class Recorder {
         db.updateSession(saved.id, { audioPath: null })
       }
     }
+    log('info', `session ${cur.session.id} saved (${this.state.segments.length} lines)`)
     this.fire('STOPPED')
-    this.set({ message: null, partial: null })
+    this.set({ message: null, previews: {} })
     this.fire('RESET')
     this.set({ sessionId: null, startedAt: null })
   }
@@ -200,108 +212,80 @@ class Recorder {
     await this.start({ parentId: prev.id, title: `${prev.title.replace(/ \(continued\)$/, '')} (continued)` })
   }
 
-  // ---------------------------------------------------------------- transcriber
+  // ---------------------------------------------------------------- capture → slicer → queue
 
-  private onPcm(cur: Active, pcm: Uint8Array) {
-    cur.wav.append(pcm)
-    cur.lastDataAt = Date.now()
-    if (this.state.status === 'starting' || this.state.status === 'retrying') this.onRecovered(cur)
-  }
-
-  private async runTranscriber(): Promise<void> {
-    const cur = this.cur
-    if (!cur) return
+  private async startCapture(cur: Active): Promise<void> {
     try {
-      const { whisper, vad } = await getContexts()
-      if (this.cur !== cur) return
-      cur.run++
-      cur.slices.clear()
       // fill any capture gap with silence so WAV time == wall-clock session time
-      const gap = cur.failedAt ? gapFillBytes(Date.now() - cur.lastDataAt) : 0
-      if (gap > 0) cur.wav.append(new Uint8Array(gap))
-
-      const stream = new ExpoAudioStream((pcm) => this.onPcm(cur, pcm))
-      const run = cur.run
-      const transcriber = new RealtimeTranscriber(
-        { whisperContext: whisper, vadContext: new RingBufferVad(vad, { vadPreset: 'meeting', preRecordingBufferMs: 600 }), audioStream: stream },
-        {
-          audioSliceSec: 25,
-          audioMinSec: 1,
-          maxSlicesInMemory: 3,
-          transcribeOptions: transcribeOptions(cur.session.language),
-          promptPreviousSlices: false, // the Hinglish model drifts to English spellings with prompts
-          realtimeProcessingPauseMs: 1500, // partial previews at most every 1.5 s to spare the CPU
-          initRealtimeAfterMs: 1200,
-        },
-        {
-          onTranscribe: (ev) => this.onTranscribe(cur, run, ev),
-          onSliceTranscriptionStabilized: () => this.onStabilized(cur, run),
-          onError: (err) => this.onTranscriberError(cur, err),
-        },
-      )
-      cur.transcriber = transcriber
+      if (cur.failedAt) {
+        const gap = gapFillBytes(Date.now() - cur.lastDataAt)
+        if (gap > 0) cur.wav.append(new Uint8Array(gap))
+      }
+      cur.slicer = new Slicer()
+      cur.sliceOffsetMs = cur.wav.durationMs
+      const mic = new Mic((pcm) => this.onPcm(cur, pcm))
+      cur.mic = mic
       cur.lastDataAt = Date.now()
-      await transcriber.start()
+      await mic.start()
     } catch (err) {
-      this.onFailure(cur, `could not start: ${err instanceof Error ? err.message : err}`)
+      this.onFailure(cur, `microphone could not start: ${err instanceof Error ? err.message : err}`)
     }
   }
 
-  private currentMs(cur: Active): number {
-    return cur.wav.durationMs
+  private onPcm(cur: Active, pcm: Int16Array) {
+    if (this.cur !== cur || !cur.slicer) return
+    cur.wav.append(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength))
+    cur.lastDataAt = Date.now()
+    if (this.state.status === 'starting' || this.state.status === 'retrying') this.onRecovered(cur)
+
+    for (const ev of cur.slicer.push(pcm)) {
+      const job: SliceJob = { startMs: cur.sliceOffsetMs + ev.startMs, endMs: cur.sliceOffsetMs + ev.endMs, pcm: ev.audio }
+      if (ev.type === 'final') cur.queue.pushFinal(job)
+      else if (cur.showPartials) cur.queue.offerPartial(job)
+    }
+    if (cur.slicer.speaking !== this.lastSpeaking) {
+      this.lastSpeaking = cur.slicer.speaking
+      updateDiagnostics({ speaking: cur.slicer.speaking, finalsQueued: cur.queue.pending })
+    }
   }
 
-  private onTranscribe(cur: Active, run: number, ev: RealtimeTranscribeEvent) {
-    if (this.cur !== cur || run !== cur.run || ev.type !== 'transcribe' || !ev.data || ev.sliceIndex < 0) return
-    cur.transcribeErrors = 0
-    // a newer slice means older ones are done even if no "stabilized" callback came
-    for (const [idx, s] of cur.slices) if (idx < ev.sliceIndex && !s.finalized) this.finalizeSlice(cur, idx)
+  private lastSpeaking = false
 
-    const raw = ev.data.result ?? ''
-    const existing = cur.slices.get(ev.sliceIndex)
-    const durationMs = Math.round(ev.recordingTime)
-    const track: SliceTrack = existing ?? { startMs: Math.max(0, this.currentMs(cur) - durationMs), text: '', raw: '', durationMs, finalized: false }
-    track.raw = raw
-    track.text = cleanTranscript(raw)
-    track.durationMs = durationMs
-    cur.slices.set(ev.sliceIndex, track)
-    this.lastTranscribed = { cur, run, sliceIndex: ev.sliceIndex }
-    if (cur.showPartials && !track.finalized) this.set({ partial: track.text || null })
+  private flushSlicer(cur: Active) {
+    for (const ev of cur.slicer?.flush() ?? []) {
+      cur.queue.pushFinal({ startMs: cur.sliceOffsetMs + ev.startMs, endMs: cur.sliceOffsetMs + ev.endMs, pcm: ev.audio })
+    }
+    cur.slicer = null
   }
 
-  private lastTranscribed: { cur: Active; run: number; sliceIndex: number } | null = null
-
-  /** Fires right after the final onTranscribe of a slice (speech ended). */
-  private onStabilized(cur: Active, run: number) {
-    const last = this.lastTranscribed
-    if (!last || last.cur !== cur || last.run !== run) return
-    this.finalizeSlice(cur, last.sliceIndex)
+  private onPartial(cur: Active, job: SliceJob, text: string, latencyMs: number) {
+    if (this.cur !== cur) return
+    updateDiagnostics({ lastPartialMs: latencyMs })
+    if (text) this.set({ previews: { ...this.state.previews, [job.startMs]: text } })
   }
 
-  private finalizeSlice(cur: Active, sliceIndex: number) {
-    const track = cur.slices.get(sliceIndex)
-    if (!track || track.finalized) return
-    track.finalized = true
-    this.set({ partial: null })
-    if (!track.text) return
+  private onFinal(cur: Active, job: SliceJob, text: string, raw: string, latencyMs: number) {
+    cur.engineErrors = 0
+    updateDiagnostics({ lastFinalMs: latencyMs, finalsQueued: cur.queue.pending })
+    const live = this.cur === cur
+    // the preview stays on screen until its final replaces it, so text never blinks out
+    const { [job.startMs]: _done, ...previews } = this.state.previews
+    if (live) this.set({ previews })
+    if (!text) return
     const seg: Segment = {
-      id: `${cur.session.id}-${cur.run}-${sliceIndex}`,
+      id: `${cur.session.id}-${job.startMs}`,
       sessionId: cur.session.id,
       stream: 'mic',
       speaker: SPEAKER,
-      startMs: track.startMs,
-      endMs: track.startMs + track.durationMs,
-      text: track.text,
-      rawText: track.raw,
+      startMs: job.startMs,
+      endMs: job.endMs,
+      text,
+      rawText: raw,
     }
     db.addSegment(seg)
-    this.set({ segments: [...this.state.segments, seg] })
-    void updateForegroundService(track.text.slice(0, 80)).catch(() => undefined)
+    if (live || this.state.sessionId === cur.session.id) this.set({ segments: [...this.state.segments, seg] })
+    void updateForegroundService(text.slice(0, 80)).catch(() => undefined)
     this.scheduleWrite(cur)
-  }
-
-  private finalizeAllSlices(cur: Active) {
-    for (const idx of [...cur.slices.keys()]) this.finalizeSlice(cur, idx)
   }
 
   private scheduleWrite(cur: Active) {
@@ -312,24 +296,15 @@ class Recorder {
     }, 2000)
   }
 
-  private async teardownTranscriber(cur: Active) {
-    const t = cur.transcriber
-    cur.transcriber = null
-    if (t) await t.stop().catch(() => undefined)
-  }
-
   // ---------------------------------------------------------------- failures & retries
 
-  private onTranscriberError(cur: Active, err: string) {
+  private onEngineError(cur: Active, err: unknown, kind: 'final' | 'partial') {
+    log('error', `${kind} transcription failed: ${err}`)
     if (this.cur !== cur) return
-    if (/audio/i.test(err)) {
-      this.onFailure(cur, err)
-      return
-    }
-    // transcription errors: tolerate a few, then reload the model
-    if (++cur.transcribeErrors >= MAX_TRANSCRIBE_ERRORS) {
-      cur.transcribeErrors = 0
-      void resetContexts().then(() => this.onFailure(cur, `speech engine error: ${err}`))
+    // tolerate a few errors, then reload the model
+    if (++cur.engineErrors >= MAX_ENGINE_ERRORS) {
+      cur.engineErrors = 0
+      void resetContexts().then(() => log('warn', 'speech model reloaded after repeated errors'))
     }
   }
 
@@ -341,26 +316,27 @@ class Recorder {
 
   private onFailure(cur: Active, reason: string) {
     if (this.cur !== cur || this.state.status === 'stopping' || cur.retryTimer) return
+    log('warn', reason)
     cur.failedAt ??= Date.now()
-    this.finalizeAllSlices(cur)
+    void cur.mic?.stop()
+    cur.mic = null
+    this.flushSlicer(cur)
     this.fire('FAILURE')
     const delay = backoffDelay(cur.attempt++)
-    this.set({ message: `${reason} — retrying in ${Math.round(delay / 1000)} s`, partial: null })
-    cur.retryTimer = setTimeout(async () => {
+    this.set({ message: `${reason} — retrying in ${Math.round(delay / 1000)} s` })
+    cur.retryTimer = setTimeout(() => {
       cur.retryTimer = null
-      if (this.cur !== cur) return
-      await this.teardownTranscriber(cur)
-      await this.runTranscriber()
+      if (this.cur === cur) void this.startCapture(cur)
     }, delay)
   }
 
   private onRecovered(cur: Active) {
-    const wasRetrying = this.state.status === 'retrying'
-    if (wasRetrying && cur.failedAt && Date.now() - cur.failedAt > 2000) {
+    if (this.state.status === 'retrying' && cur.failedAt && Date.now() - cur.failedAt > 2000) {
       const gapMs = Date.now() - cur.failedAt
+      const now = cur.wav.durationMs
       const seg: Segment = {
         id: uuid(), sessionId: cur.session.id, stream: 'mic', speaker: 'Notice',
-        startMs: Math.max(0, this.currentMs(cur) - gapMs), endMs: this.currentMs(cur),
+        startMs: Math.max(0, now - gapMs), endMs: now,
         text: `[Microphone was unavailable for ${Math.round(gapMs / 1000)} s]`,
       }
       db.addSegment(seg)
@@ -378,7 +354,7 @@ class Recorder {
     if (s === 'active' && cur && this.state.status === 'retrying' && cur.retryTimer) {
       clearTimeout(cur.retryTimer)
       cur.retryTimer = null
-      void this.teardownTranscriber(cur).then(() => this.runTranscriber())
+      void this.startCapture(cur)
     }
   }
 
@@ -412,12 +388,13 @@ class Recorder {
             db.updateSession(s.id, { audioPath: null })
           }
         }
-      } catch {
-        // recovery is best effort; the session is still closed below
+      } catch (err) {
+        log('error', `recovery of ${s.id} failed: ${err}`)
       }
       db.updateSession(s.id, { status: 'interrupted', endedAt: s.startedAt + endMs })
       const updated = db.getSession(s.id)
       if (updated) writeTranscriptFiles(updated, db.segments(s.id))
+      log('info', `recovered interrupted session ${s.id}`)
     }
     this.set({ recovering: false })
   }

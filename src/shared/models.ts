@@ -15,3 +15,12 @@ export const MOBILE_MODEL = {
 /** Silero VAD crop padding, same values as the desktop engine (tuned on golden clips). */
 export const CROP_PAD_BEFORE_MS = 450
 export const CROP_PAD_AFTER_MS = 750
+
+/**
+ * Encoder window for a live preview (whisper's audio_ctx; 1500 = 30 s, 50 per second).
+ * Encoding only the slice length makes previews ~4x faster; finals keep the full
+ * window because shortening it costs accuracy. Needs patches/whisper.rn+*.patch.
+ */
+export function audioCtxFor(audioMs: number): number {
+  return Math.min(1500, Math.max(384, Math.ceil((((audioMs + 1000) / 1000) * 50) / 64) * 64))
+}

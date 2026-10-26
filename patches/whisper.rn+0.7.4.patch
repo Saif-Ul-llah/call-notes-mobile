@@ -1,0 +1,14 @@
+diff --git a/node_modules/whisper.rn/cpp/jsi/RNWhisperJSI.cpp b/node_modules/whisper.rn/cpp/jsi/RNWhisperJSI.cpp
+index ac3403e..f8e2acd 100644
+--- a/node_modules/whisper.rn/cpp/jsi/RNWhisperJSI.cpp
++++ b/node_modules/whisper.rn/cpp/jsi/RNWhisperJSI.cpp
+@@ -903,6 +903,9 @@ TranscribeConfig createTranscribeConfig(
+         config.params.temperature_inc);
+     config.params.greedy.best_of =
+         getIntProperty(runtime, options, "bestOf", config.params.greedy.best_of);
++    // Call Notes: encoder window override (live previews encode only the slice length)
++    config.params.audio_ctx =
++        getIntProperty(runtime, options, "audioCtx", config.params.audio_ctx);
+     config.nProcessors = std::max(1, getIntProperty(runtime, options, "nProcessors", 1));
+     config.jobId = getIntProperty(
+         runtime,

@@ -42,11 +42,13 @@ export interface SessionInfo {
   dir: string
   parentId: string | null
   segmentCount?: number
+  /** first transcribed line, for list previews */
+  snippet?: string
 }
 
 /** On-disk transcript.json — the format phase 2 (LLM summaries / MOM) consumes. */
 export interface TranscriptDoc {
   version: 1
-  session: Omit<SessionInfo, 'dir' | 'segmentCount'>
+  session: Omit<SessionInfo, 'dir' | 'segmentCount' | 'snippet'>
   segments: Array<Pick<Segment, 'id' | 'startMs' | 'endMs' | 'speaker' | 'stream' | 'text'>>
 }
