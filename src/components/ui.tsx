@@ -61,7 +61,7 @@ export function Segmented<V extends string>({
             onPress={() => onChange(o.value)}
             style={[styles.segItem, active && styles.segItemActive]}
           >
-            <Text style={[styles.segText, active && styles.segTextActive]} numberOfLines={1}>
+            <Text style={[styles.segText, active && styles.segTextActive]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
               {o.label}
             </Text>
           </Pressable>

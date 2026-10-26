@@ -12,6 +12,7 @@ Get the Android APK from the [Releases page](https://github.com/Saif-Ul-llah/cal
 
 - **Recording:** tap the big gold **START** and pick Roman Urdu/Hindi, English or Auto. Words appear live.
 - **History:** search, playback, share (.txt/.md/.srt/.json/audio), and resume interrupted calls.
+- **Floating mic (Android):** a mic bubble that floats over other apps, like a picture-in-picture player. Tap it to start or stop, drag it to move, long-press to open the app. Turn it on in Settings ("Display over other apps"). iOS doesn't allow this.
 - **Background:** keeps transcribing with the screen off. Android uses a microphone foreground service with a notification; iOS uses the background audio mode.
 - **Retry and restart:**
   - If the microphone fails or is interrupted (for example, by a phone call), capture restarts automatically.

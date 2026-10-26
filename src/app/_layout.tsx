@@ -9,6 +9,7 @@ import {
   AtkinsonHyperlegible_400Regular_Italic,
   AtkinsonHyperlegible_700Bold,
 } from '@expo-google-fonts/atkinson-hyperlegible'
+import { initBubble } from '../lib/bubble'
 import { recorder } from '../lib/recorder'
 import { colors, fonts } from '../theme'
 
@@ -26,6 +27,7 @@ export default function RootLayout() {
   useEffect(() => {
     // close sessions a crash left open and transcribe their remaining audio
     void recorder.recover()
+    initBubble()
   }, [])
 
   if (!loaded) return <View style={{ flex: 1, backgroundColor: colors.ebony }} />

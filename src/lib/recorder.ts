@@ -71,6 +71,8 @@ class Recorder {
   private listeners = new Set<() => void>()
   private cur: Active | null = null
   private appStateSub: { remove(): void } | null = null
+  /** crash recovery uses the speech model too; a new session waits for it to finish */
+  private recovery: Promise<void> = Promise.resolve()
 
   // ---------------------------------------------------------------- store API
 
@@ -96,7 +98,19 @@ class Recorder {
   // ---------------------------------------------------------------- lifecycle
 
   async start(opts: { parentId?: string; title?: string } = {}): Promise<void> {
-    if (this.cur) return
+    if (this.cur || this.starting) return
+    this.starting = true
+    try {
+      await this.recovery
+      await this.begin(opts)
+    } finally {
+      this.starting = false
+    }
+  }
+
+  private starting = false
+
+  private async begin(opts: { parentId?: string; title?: string }): Promise<void> {
     if (this.state.status === 'saved' || this.state.status === 'interrupted') this.fire('RESET')
 
     const mic = await requestRecordingPermissionsAsync()
@@ -104,7 +118,8 @@ class Recorder {
       this.set({ message: 'Microphone permission is needed to transcribe. Enable it in system settings.' })
       return
     }
-    if (Platform.OS === 'android') await requestNotificationPermissionsAsync().catch(() => undefined)
+    // permission dialogs can only appear while the app is on screen (not from the bubble)
+    if (Platform.OS === 'android' && AppState.currentState === 'active') await requestNotificationPermissionsAsync().catch(() => undefined)
 
     const settings = db.getSettings()
     const now = new Date()
@@ -165,7 +180,10 @@ class Recorder {
       log('warn', `background mode unavailable: ${err}`)
     }
     // load the model while the mic starts, so the first slice doesn't wait for it
-    void getContexts().catch((err) => log('error', `model load failed: ${err}`))
+    void getContexts().catch((err) => {
+      log('error', `model load failed: ${err}`)
+      if (this.cur === cur) this.set({ message: 'The speech model could not load. Close and reopen Call Notes; your audio is still being saved.' })
+    })
     await this.startCapture(cur)
   }
 
@@ -265,6 +283,7 @@ class Recorder {
   }
 
   private onFinal(cur: Active, job: SliceJob, text: string, raw: string, latencyMs: number) {
+    if (cur.engineErrors > 0 && this.cur === cur && this.state.status === 'recording') this.set({ message: null })
     cur.engineErrors = 0
     updateDiagnostics({ lastFinalMs: latencyMs, finalsQueued: cur.queue.pending })
     const live = this.cur === cur
@@ -301,10 +320,13 @@ class Recorder {
   private onEngineError(cur: Active, err: unknown, kind: 'final' | 'partial') {
     log('error', `${kind} transcription failed: ${err}`)
     if (this.cur !== cur) return
-    // tolerate a few errors, then reload the model
+    // tolerate a few errors, then reload the model; tell the user either way
     if (++cur.engineErrors >= MAX_ENGINE_ERRORS) {
       cur.engineErrors = 0
+      this.set({ message: 'Transcription stopped working, reloading the speech model. Your audio is still being saved.' })
       void resetContexts().then(() => log('warn', 'speech model reloaded after repeated errors'))
+    } else if (kind === 'final') {
+      this.set({ message: 'A line could not be transcribed. Trying again with the next one.' })
     }
   }
 
@@ -361,7 +383,12 @@ class Recorder {
   // ---------------------------------------------------------------- crash recovery
 
   /** Close sessions a crash left open and transcribe the audio after their last segment. */
-  async recover(): Promise<void> {
+  recover(): Promise<void> {
+    this.recovery = this.runRecovery()
+    return this.recovery
+  }
+
+  private async runRecovery(): Promise<void> {
     const crashed = db.sessionsWithStatus(LIVE_STATES)
     if (crashed.length === 0) return
     this.set({ recovering: true })

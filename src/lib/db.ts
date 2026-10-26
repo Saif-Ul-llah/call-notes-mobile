@@ -146,9 +146,13 @@ export interface MobileSettings {
   language: LanguageMode
   keepAudio: boolean
   showPartials: boolean
+  /** Android: floating mic bubble over other apps */
+  floatingMic: boolean
+  /** transcript text size multiplier */
+  textScale: number
 }
 
-const DEFAULT_SETTINGS: MobileSettings = { language: 'roman', keepAudio: true, showPartials: true }
+const DEFAULT_SETTINGS: MobileSettings = { language: 'roman', keepAudio: true, showPartials: true, floatingMic: false, textScale: 1 }
 
 export function getSettings(): MobileSettings {
   const rows = db.getAllSync<{ key: string; value: string }>('SELECT key, value FROM settings')

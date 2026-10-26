@@ -7,12 +7,14 @@ import * as db from '../lib/db'
 import { useDiagnostics } from '../lib/diagnostics'
 import { recorder } from '../lib/recorder'
 import { isLive, useElapsed, useRecorder } from '../lib/use-recorder'
+import { useSettings } from '../lib/use-settings'
 import { formatClock } from '../shared/transcript-format'
 import type { LanguageMode, Segment } from '../shared/types'
 import { colors, fonts, type } from '../theme'
 
+// short labels fit a third of a 360 dp screen; Settings explains "Roman Urdu" covers Hindi too
 const LANGUAGES: Array<{ value: LanguageMode; label: string }> = [
-  { value: 'roman', label: 'Roman Urdu/Hindi' },
+  { value: 'roman', label: 'Roman Urdu' },
   { value: 'en', label: 'English' },
   { value: 'auto', label: 'Auto' },
 ]
@@ -35,28 +37,36 @@ function LevelRing({ active, warn }: { active: boolean; warn: boolean }) {
   )
 }
 
-function RecordButton({ live, warn, onPress }: { live: boolean; warn: boolean; onPress: () => void }) {
+function RecordButton({ live, warn, busy, onPress }: { live: boolean; warn: boolean; busy: boolean; onPress: () => void }) {
   return (
     <View style={styles.recordWrap}>
       <LevelRing active={live} warn={warn} />
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={live ? 'Stop transcript' : 'Start transcript'}
+        accessibilityLabel={busy ? 'Recovering the last call' : live ? 'Stop transcript' : 'Start transcript'}
+        accessibilityState={{ disabled: busy }}
+        disabled={busy}
         onPress={onPress}
-        style={({ pressed }) => [styles.disc, live && styles.discLive, live && warn && { borderColor: colors.warn }, pressed && { transform: [{ scale: 0.97 }] }]}
+        style={({ pressed }) => [
+          styles.disc,
+          live && styles.discLive,
+          live && warn && { borderColor: colors.warn },
+          busy && { opacity: 0.55 },
+          pressed && { transform: [{ scale: 0.97 }] },
+        ]}
       >
-        {live ? <View style={styles.stop} /> : <Text style={styles.discLabel}>Start</Text>}
+        {live ? <View style={styles.stop} /> : <Text style={styles.discLabel}>{busy ? 'Wait' : 'Start'}</Text>}
       </Pressable>
     </View>
   )
 }
 
-const Line = memo(function Line({ seg }: { seg: Segment }) {
+const Line = memo(function Line({ seg, scale }: { seg: Segment; scale: number }) {
   const notice = seg.speaker === 'Notice'
   return (
     <View style={styles.line}>
       <Text style={styles.ts}>{formatClock(seg.startMs)}</Text>
-      <Text style={[styles.text, notice && styles.notice]}>{seg.text}</Text>
+      <Text style={[styles.text, { fontSize: type.read * scale, lineHeight: 26 * scale }, notice && styles.notice]}>{seg.text}</Text>
     </View>
   )
 })
@@ -68,6 +78,7 @@ export default function Home() {
   const insets = useSafeAreaInsets()
   const [language, setLanguage] = useState<LanguageMode>(() => db.getSettings().language)
   const listRef = useRef<FlatList<Segment>>(null)
+  const { textScale } = useSettings()
   const previews = Object.entries(state.previews)
     .sort(([a], [b]) => Number(a) - Number(b))
     .map(([, text]) => text)
@@ -106,15 +117,23 @@ export default function Home() {
         {state.message && <Text style={styles.message}>{state.message}</Text>}
       </View>
 
-      <RecordButton live={live} warn={state.status === 'retrying'} onPress={() => (live ? void recorder.stop() : void recorder.start())} />
-      <Text style={styles.hint}>{live ? 'Tap to stop and save' : 'For phone calls, turn on speakerphone'}</Text>
+      <RecordButton
+        live={live}
+        warn={state.status === 'retrying'}
+        busy={state.recovering && !live}
+        onPress={() => (live ? void recorder.stop() : void recorder.start())}
+      />
+      <Text style={styles.hint}>
+        {state.recovering && !live ? 'Finishing your last call first' : live ? 'Tap to stop and save' : 'For phone calls, turn on speakerphone'}
+      </Text>
 
       <View style={styles.panel}>
         <FlatList
           ref={listRef}
           data={state.segments}
           keyExtractor={(s) => s.id}
-          renderItem={({ item }) => <Line seg={item} />}
+          renderItem={({ item }) => <Line seg={item} scale={textScale} />}
+          extraData={textScale}
           onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
           contentContainerStyle={{ paddingVertical: 14, flexGrow: 1 }}
           ListEmptyComponent={
@@ -133,7 +152,7 @@ export default function Home() {
             previews.length ? (
               <View style={styles.line} accessibilityLiveRegion="polite">
                 <Text style={styles.ts}>now</Text>
-                <Text style={[styles.text, styles.preview]}>
+                <Text style={[styles.text, styles.preview, { fontSize: type.read * textScale, lineHeight: 26 * textScale }]}>
                   {previews.join(' ')}
                   <Text style={styles.caret}> ▍</Text>
                 </Text>

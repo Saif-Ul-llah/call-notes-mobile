@@ -9,6 +9,8 @@ import { deleteSessionFiles, shareAudio, shareTranscript, type ShareFormat } fro
 import { recorder } from '../../lib/recorder'
 import { isLive, useRecorder } from '../../lib/use-recorder'
 import { formatClock, toParagraphs, toText } from '../../shared/transcript-format'
+import { RecordingBar } from '../../components/RecordingBar'
+import { useSettings } from '../../lib/use-settings'
 import { colors, fonts, radius, type } from '../../theme'
 
 const LANGUAGE_LABEL = { roman: 'Roman Urdu/Hindi', en: 'English', auto: 'Auto-detect' } as const
@@ -56,6 +58,7 @@ export default function SessionScreen() {
   const [title, setTitle] = useState(session?.title ?? '')
   const [seek, setSeek] = useState<{ ms: number; n: number } | null>(null)
   const isRecordingThis = live.sessionId === id
+  const { textScale } = useSettings()
   // live sessions re-read their lines as they arrive
   const segments = useMemo(() => db.segments(id), [id, isRecordingThis ? live.segments.length : 0])
 
@@ -94,6 +97,7 @@ export default function SessionScreen() {
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: isRecordingThis ? 'Live transcript' : 'Transcript' }} />
+      {!isRecordingThis && <RecordingBar />}
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
         <TextInput
           style={styles.title}
@@ -142,7 +146,10 @@ export default function SessionScreen() {
               <Text style={styles.paraTs}>{formatClock(p.startMs)}</Text>
               <View style={{ flex: 1 }}>
                 {p.speaker !== 'Speaker' && <Text style={[styles.who, { color: speakerColor(p.speaker) }]}>{p.speaker}</Text>}
-                <Text style={[styles.paraText, p.speaker === 'Notice' && { color: colors.warn, fontSize: type.sm }]} selectable>
+                <Text
+                  style={[styles.paraText, { fontSize: type.read * textScale, lineHeight: 27 * textScale }, p.speaker === 'Notice' && { color: colors.warn, fontSize: type.sm }]}
+                  selectable
+                >
                   {p.text}
                 </Text>
               </View>

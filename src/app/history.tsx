@@ -4,6 +4,7 @@ import { router, useFocusEffect } from 'expo-router'
 import * as db from '../lib/db'
 import { useRecorder } from '../lib/use-recorder'
 import { formatClock } from '../shared/transcript-format'
+import { RecordingBar } from '../components/RecordingBar'
 import { colors, fonts, radius, type } from '../theme'
 
 function relativeDay(ts: number): string {
@@ -27,7 +28,9 @@ export default function History() {
   )
 
   return (
-    <View style={styles.screen}>
+    <View style={{ flex: 1, backgroundColor: colors.ebony }}>
+      <RecordingBar />
+      <View style={styles.screen}>
       <TextInput
         style={styles.search}
         placeholder="Search calls and words"
@@ -69,6 +72,7 @@ export default function History() {
           )
         }}
       />
+      </View>
     </View>
   )
 }
