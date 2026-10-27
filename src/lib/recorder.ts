@@ -1,9 +1,14 @@
 // Mobile transcription session controller.
 //
 //   mic (expo-audio AudioStream) -> WAV on disk (the session timeline)
-//                                -> Slicer (speech slices, partial snapshots ~1 s)
-//                                -> EngineQueue (whisper.rn: greedy previews, beam finals)
+//                                -> engine, one of:
+//                                   Android on-device speech (streams words and lines in real time), or
+//                                   Slicer -> EngineQueue (whisper.rn: greedy previews, beam finals)
 //                                -> romanizer -> SQLite segments -> UI
+//
+// Android speech is used when the phone has it with the language pack installed: it keeps
+// up on any phone. Whisper is the fallback (iOS, older Android, no language pack, or the
+// recognizer failing mid-call, in which case the session switches over seamlessly).
 //
 // Reliability: the WAV is written before transcription, so a crash loses no audio.
 // On failure capture restarts with exponential backoff (silence is written for the
@@ -16,6 +21,7 @@ import { requestNotificationPermissionsAsync, requestRecordingPermissionsAsync, 
 import { LIVE_STATES, backoffDelay, canTransition, transition, type SessionEvent, type SessionState } from '../shared/session-state'
 import { sessionTitle } from '../shared/transcript-format'
 import { MOBILE_MODEL } from '../shared/models'
+import { cleanTranscript } from '../shared/romanizer'
 import type { Segment } from '../shared/types'
 import * as db from './db'
 import { log, updateDiagnostics } from './diagnostics'
@@ -26,10 +32,13 @@ import { Mic } from './mic'
 import { Slicer } from './slicer'
 import { startForegroundService, stopForegroundService, updateForegroundService } from './background'
 import { BYTES_PER_MS, gapFillBytes, tailWindows } from './wav'
+import { SystemSpeech, systemLocale, systemSpeechStatus } from './system-speech'
 
 const SPEAKER = 'Speaker'
 const STALL_MS = 8000
 const MAX_ENGINE_ERRORS = 3
+/** Android speech reports a line at the pause; it began roughly this long before its first words showed. */
+const PARTIAL_LAG_MS = 1500
 
 export interface RecorderState {
   status: SessionState
@@ -59,6 +68,12 @@ interface Active {
   stallTimer: ReturnType<typeof setInterval>
   writeTimer: ReturnType<typeof setTimeout> | null
   showPartials: boolean
+  /** Android on-device speech, when it is the engine for this session */
+  speech: SystemSpeech | null
+  /** WAV time where the line Android speech is currently hearing began */
+  speechLineStart: number | null
+  /** WAV time where the last line ended */
+  lastLineEnd: number
 }
 
 let seq = 0
@@ -122,6 +137,7 @@ class Recorder {
     if (Platform.OS === 'android' && AppState.currentState === 'active') await requestNotificationPermissionsAsync().catch(() => undefined)
 
     const settings = db.getSettings()
+    const useSystem = settings.engine !== 'whisper' && (await systemSpeechStatus(settings.language)) === 'ready'
     const now = new Date()
     const sessionId = uuid()
     const dir = newSessionDir(sessionId, now)
@@ -133,7 +149,7 @@ class Recorder {
       endedAt: null,
       status: 'starting',
       language: settings.language,
-      model: MOBILE_MODEL.id,
+      model: useSystem ? 'android-speech' : MOBILE_MODEL.id,
       platform: Platform.OS === 'ios' ? 'ios' : 'android',
       dir: dir.uri,
       parentId: opts.parentId ?? null,
@@ -157,9 +173,12 @@ class Recorder {
       stallTimer: setInterval(() => this.checkStall(), 2000),
       writeTimer: null,
       showPartials: settings.showPartials,
+      speech: null,
+      speechLineStart: null,
+      lastLineEnd: 0,
     }
     cur.queue = new EngineQueue(
-      { getContexts, decodeOptions: (kind, ms) => decodeOptions(session.language, kind, ms) },
+      { getContexts, decodeOptions: (kind, ms, behind) => decodeOptions(session.language, kind, ms, behind) },
       {
         onFinal: (job, text, raw, ms) => this.onFinal(cur, job, text, raw, ms),
         onPartial: (job, text, ms) => this.onPartial(cur, job, text, ms),
@@ -180,11 +199,15 @@ class Recorder {
       // not fatal: transcription still works while the app is in the foreground
       log('warn', `background mode unavailable: ${err}`)
     }
-    // load the model while the mic starts, so the first slice doesn't wait for it
-    void getContexts().catch((err) => {
-      log('error', `model load failed: ${err}`)
-      if (this.cur === cur) this.set({ message: 'The speech model could not load. Close and reopen Call Notes; your audio is still being saved.' })
-    })
+    if (useSystem) {
+      try {
+        await this.startSystemSpeech(cur)
+      } catch (err) {
+        this.useWhisper(cur, `could not start: ${err}`)
+      }
+    } else {
+      this.preloadWhisper(cur)
+    }
     await this.startCapture(cur)
   }
 
@@ -197,9 +220,12 @@ class Recorder {
     if (cur.retryTimer) clearTimeout(cur.retryTimer)
     await cur.mic?.stop()
     cur.mic = null
+    await cur.speech?.stop()
+    cur.speech = null
     this.flushSlicer(cur)
-    // let queued slices finish (bounded: the audio is safe on disk anyway)
-    await Promise.race([cur.queue.drain(), new Promise((r) => setTimeout(r, 20000))])
+    // every line is transcribed before the session closes, however far behind a slow
+    // phone is; the user sees the count go down (a crash here is recovered from the WAV)
+    await this.drainWithProgress(cur)
     cur.queue.close()
     cur.wav.close()
 
@@ -240,8 +266,10 @@ class Recorder {
         const gap = gapFillBytes(Date.now() - cur.lastDataAt)
         if (gap > 0) cur.wav.append(new Uint8Array(gap))
       }
-      cur.slicer = new Slicer()
-      cur.sliceOffsetMs = cur.wav.durationMs
+      if (!cur.speech) {
+        cur.slicer = new Slicer()
+        cur.sliceOffsetMs = cur.wav.durationMs
+      }
       const mic = new Mic((pcm) => this.onPcm(cur, pcm))
       cur.mic = mic
       cur.lastDataAt = Date.now()
@@ -252,10 +280,15 @@ class Recorder {
   }
 
   private onPcm(cur: Active, pcm: Int16Array) {
-    if (this.cur !== cur || !cur.slicer) return
+    if (this.cur !== cur || (!cur.slicer && !cur.speech)) return
     cur.wav.append(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength))
     cur.lastDataAt = Date.now()
     if (this.state.status === 'starting' || this.state.status === 'retrying') this.onRecovered(cur)
+    if (cur.speech) {
+      cur.speech.feed(pcm)
+      return
+    }
+    if (!cur.slicer) return
 
     for (const ev of cur.slicer.push(pcm)) {
       const job: SliceJob = { startMs: cur.sliceOffsetMs + ev.startMs, endMs: cur.sliceOffsetMs + ev.endMs, pcm: ev.audio }
@@ -279,6 +312,77 @@ class Recorder {
 
   private partialCount = 0
 
+  // ---------------------------------------------------------------- Android on-device speech
+
+  private async startSystemSpeech(cur: Active): Promise<void> {
+    const speech = new SystemSpeech(systemLocale(cur.session.language), {
+      onPartial: (text) => this.onSystemPartial(cur, text),
+      onSegment: (text) => this.onSystemSegment(cur, text),
+      onFatal: (reason) => this.useWhisper(cur, reason),
+    })
+    cur.speech = speech
+    await speech.start()
+  }
+
+  private onSystemPartial(cur: Active, raw: string) {
+    if (this.cur !== cur) return
+    const now = cur.wav.durationMs
+    cur.speechLineStart ??= Math.max(cur.lastLineEnd, now - PARTIAL_LAG_MS)
+    if (!cur.showPartials) return
+    const text = cleanTranscript(raw)
+    if (text) this.set({ previews: { [cur.speechLineStart]: text } })
+  }
+
+  private onSystemSegment(cur: Active, raw: string) {
+    const endMs = cur.wav.durationMs
+    const startMs = cur.speechLineStart ?? Math.max(cur.lastLineEnd, endMs - PARTIAL_LAG_MS)
+    cur.speechLineStart = null
+    cur.lastLineEnd = endMs
+    const text = cleanTranscript(raw)
+    log('info', `line: ${endMs - startMs} ms audio (android speech)${text ? '' : ' (no speech)'}`)
+    if (this.cur === cur) this.set({ previews: {} })
+    if (text) this.addLine(cur, { startMs, endMs, text, raw })
+  }
+
+  /** Switch this session to whisper (Android speech unavailable or failing). */
+  private useWhisper(cur: Active, reason: string) {
+    log('warn', `android speech: ${reason}; using the built-in model`)
+    cur.speech?.cancel()
+    cur.speech = null
+    cur.speechLineStart = null
+    // a session that switched mid-call records both engines
+    if (cur.session.model !== MOBILE_MODEL.id) {
+      cur.session.model = cur.wav.durationMs > 0 ? `${cur.session.model}+${MOBILE_MODEL.id}` : MOBILE_MODEL.id
+      db.updateSession(cur.session.id, { model: cur.session.model })
+    }
+    this.preloadWhisper(cur)
+    if (this.cur === cur) {
+      cur.slicer = new Slicer()
+      cur.sliceOffsetMs = cur.wav.durationMs
+      this.set({ previews: {}, message: 'Android speech stopped, so Call Notes switched to its built-in model. Lines may appear more slowly.' })
+    }
+  }
+
+  /** Load whisper while the mic starts, so the first slice doesn't wait for it. */
+  private preloadWhisper(cur: Active) {
+    void getContexts().catch((err) => {
+      log('error', `model load failed: ${err}`)
+      if (this.cur === cur) this.set({ message: 'The speech model could not load. Close and reopen Call Notes; your audio is still being saved.' })
+    })
+  }
+
+  private async drainWithProgress(cur: Active): Promise<void> {
+    const tick = setInterval(() => {
+      const n = cur.queue.pending
+      if (n > 0) this.set({ message: `Finishing ${n} line${n === 1 ? '' : 's'}…` })
+    }, 500)
+    try {
+      await cur.queue.drain()
+    } finally {
+      clearInterval(tick)
+    }
+  }
+
   private onPartial(cur: Active, job: SliceJob, text: string, latencyMs: number) {
     if (this.cur !== cur) return
     updateDiagnostics({ lastPartialMs: latencyMs })
@@ -291,24 +395,29 @@ class Recorder {
     if (cur.engineErrors > 0 && this.cur === cur && this.state.status === 'recording') this.set({ message: null })
     cur.engineErrors = 0
     updateDiagnostics({ lastFinalMs: latencyMs, finalsQueued: cur.queue.pending })
-    const live = this.cur === cur
     // the preview stays on screen until its final replaces it, so text never blinks out
-    const { [job.startMs]: _done, ...previews } = this.state.previews
-    if (live) this.set({ previews })
-    if (!text) return
+    if (this.cur === cur) {
+      const previews = { ...this.state.previews }
+      for (const start of job.parts ?? [job.startMs]) delete previews[start]
+      this.set({ previews })
+    }
+    if (text) this.addLine(cur, { startMs: job.startMs, endMs: job.endMs, text, raw })
+  }
+
+  private addLine(cur: Active, line: { startMs: number; endMs: number; text: string; raw: string }) {
     const seg: Segment = {
-      id: `${cur.session.id}-${job.startMs}`,
+      id: `${cur.session.id}-${line.startMs}`,
       sessionId: cur.session.id,
       stream: 'mic',
       speaker: SPEAKER,
-      startMs: job.startMs,
-      endMs: job.endMs,
-      text,
-      rawText: raw,
+      startMs: line.startMs,
+      endMs: line.endMs,
+      text: line.text,
+      rawText: line.raw,
     }
     db.addSegment(seg)
-    if (live || this.state.sessionId === cur.session.id) this.set({ segments: [...this.state.segments, seg] })
-    void updateForegroundService(text.slice(0, 80)).catch(() => undefined)
+    if (this.cur === cur || this.state.sessionId === cur.session.id) this.set({ segments: [...this.state.segments, seg] })
+    void updateForegroundService(line.text.slice(0, 80)).catch(() => undefined)
     this.scheduleWrite(cur)
   }
 

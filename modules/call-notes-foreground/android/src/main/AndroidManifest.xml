@@ -4,6 +4,12 @@
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <!-- floating mic bubble over other apps (the user grants it in system settings) -->
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+  <!-- Android 11+ package visibility: lets us find and bind the speech recognition service -->
+  <queries>
+    <intent>
+      <action android:name="android.speech.RecognitionService" />
+    </intent>
+  </queries>
   <application>
     <!-- Android 14+ requires microphone-type foreground services to declare the type -->
     <service

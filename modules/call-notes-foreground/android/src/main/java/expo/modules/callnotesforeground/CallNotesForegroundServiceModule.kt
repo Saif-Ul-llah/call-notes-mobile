@@ -3,21 +3,36 @@ package expo.modules.callnotesforeground
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import expo.modules.kotlin.exception.Exceptions
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import expo.modules.kotlin.typedarray.Uint8Array
 
 class CallNotesForegroundServiceModule : Module() {
   private val context: Context
     get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
 
+  private var speech: LiveSpeech? = null
+
+  private fun liveSpeech(): LiveSpeech? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+    return speech ?: LiveSpeech(context) { event, body -> sendEvent(event, body) }.also { speech = it }
+  }
+
   override fun definition() = ModuleDefinition {
     Name("CallNotesForegroundService")
 
-    Events("onBubblePress")
+    Events("onBubblePress", "onSpeechReady", "onSpeechPartial", "onSpeechSegment", "onSpeechEnd", "onSpeechError")
+
+    OnDestroy {
+      speech?.cancel()
+      speech = null
+    }
 
     OnCreate {
       FloatingBubble.onPress = { sendEvent("onBubblePress", mapOf<String, Any?>()) }
@@ -76,6 +91,43 @@ class CallNotesForegroundServiceModule : Module() {
 
     AsyncFunction("setBubbleRecording") { recording: Boolean ->
       FloatingBubble.setRecording(recording)
+    }.runOnQueue(Queues.MAIN)
+
+    // ---- device capacity (how many whisper contexts can run side by side)
+
+    Function("deviceInfo") {
+      val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+      val mem = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+      mapOf("cores" to Runtime.getRuntime().availableProcessors(), "memoryMb" to (mem.totalMem / (1024 * 1024)).toInt())
+    }
+
+    // ---- Android on-device speech recognition (Android 13+), fed with our own PCM
+
+    AsyncFunction("speechSupport") { locale: String, promise: Promise ->
+      val s = liveSpeech()
+      if (s == null) promise.resolve(mapOf("onDevice" to false)) else s.checkSupport(locale) { promise.resolve(it) }
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("speechDownload") { locale: String ->
+      liveSpeech()?.download(locale)
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("speechStart") { locale: String ->
+      liveSpeech()?.start(locale) ?: throw IllegalStateException("on-device speech needs Android 13 or newer")
+    }.runOnQueue(Queues.MAIN)
+
+    Function("speechFeed") { pcm: Uint8Array ->
+      val bytes = ByteArray(pcm.byteLength)
+      pcm.read(bytes, 0, pcm.byteLength)
+      speech?.feed(bytes)
+    }
+
+    AsyncFunction("speechStop") {
+      speech?.stop()
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("speechCancel") {
+      speech?.cancel()
     }.runOnQueue(Queues.MAIN)
   }
 }

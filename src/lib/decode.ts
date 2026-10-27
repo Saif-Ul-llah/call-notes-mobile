@@ -13,12 +13,14 @@ export function whisperLanguage(mode: LanguageMode): string {
 export const FINAL_CTX_EXTRA_MS = 2000
 
 /**
- * Lines: beam 3 over a window cut to the cropped speech + 2 s. Previews: greedy over a
- * window cut to the slice, on their own context and fewer threads, so they keep
- * flowing while a line is being finished.
+ * Lines: beam 3 over a window cut to the cropped speech + 2 s; greedy when lines are
+ * waiting (about 2x faster, so a slow phone catches up). Previews: greedy over a window
+ * cut to the slice, on their own context and fewer threads, so they keep flowing while
+ * a line is being finished.
  */
-export function decodeOptions(mode: LanguageMode, kind: 'final' | 'partial', audioMs = 0) {
+export function decodeOptions(mode: LanguageMode, kind: 'final' | 'partial', audioMs = 0, behind = false) {
   const language = whisperLanguage(mode)
-  if (kind === 'final') return { language, temperature: 0, beamSize: 3, bestOf: 3, maxThreads: 4, audioCtx: audioCtxFor(audioMs + FINAL_CTX_EXTRA_MS) }
+  const beam = behind ? 1 : 3
+  if (kind === 'final') return { language, temperature: 0, beamSize: beam, bestOf: beam, maxThreads: 4, audioCtx: audioCtxFor(audioMs + FINAL_CTX_EXTRA_MS) }
   return { language, temperature: 0, beamSize: 1, bestOf: 1, maxThreads: 2, audioCtx: audioCtxFor(audioMs) }
 }

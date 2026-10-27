@@ -11,6 +11,9 @@ Get the Android APK from the [Releases page](https://github.com/Saif-Ul-llah/cal
 ## Features
 
 - **Recording:** tap the big gold **START** and pick Roman Urdu/Hindi, English or Auto. Words appear live.
+- **Two speech engines** (Settings → Speech engine):
+  - **Android speech** (default on Android 13+): the phone's offline speech recognizer, the engine behind Google voice typing. Call Notes streams its own microphone audio into it, so it keeps the recording, and text arrives in real time even on budget phones. It needs the offline language pack (Hindi for Roman Urdu/Hindi), which Settings can download. Hindi comes back in Devanagari and is romanized.
+  - **Built-in model**: the bundled whisper Hinglish model, used on iOS, on older Android, when the language pack is missing, or when Android speech fails mid-call (the call switches over automatically). When it falls behind it merges waiting lines into ~15 s chunks, decodes them greedily and runs two lines at once on 8-core phones. The screen shows "Catching up" while lines are waiting.
 - **History:** search, playback, share (.txt/.md/.srt/.json/audio), and resume interrupted calls.
 - **Floating mic (Android):** a mic bubble that floats over other apps, like a picture-in-picture player. Tap it to start or stop, drag it to move, long-press to open the app. Turn it on in Settings ("Display over other apps"). iOS doesn't allow this.
 - **Background:** keeps transcribing with the screen off. Android uses a microphone foreground service with a notification; iOS uses the background audio mode.
@@ -73,6 +76,13 @@ This runs the live pipeline (slicer → engine queue → romanizer) on the clips
 PIPELINE=1 WHISPER_NATIVE=../call-notes-desktop/native/linux-x64-avx2/index.node npx vitest run src/lib/pipeline.test.ts
 ```
 
+To check a long real recording (speed and text, written to JSON), slice it like the app and transcribe one slice at a time or in merged chunks:
+
+```bash
+LECTURE=/path/to/call.wav WHISPER_NATIVE=<absolute path to index.node> LECTURE_MERGE_MS=15000 LECTURE_BEAM=1 \
+  LECTURE_OUT=out.json npx vitest run src/lib/lecture-eval.test.ts
+```
+
 whisper.rn is patched with `patch-package` (`patches/`) so live previews can shorten whisper's encoder window (`audioCtx`), which makes them about 4× faster.
 
 ### Day-to-day git workflow
@@ -91,7 +101,8 @@ gh pr create --fill
 src/app/                    screens (Expo Router): home/live, history, transcript, settings
 src/lib/                    recorder (session + retry + recovery), whisper engine, SQLite, files
 src/shared/                 romanizer, transcript formats, state machine (shared with desktop)
-modules/call-notes-foreground/  local Expo module: Android microphone foreground service (Kotlin)
+modules/call-notes-foreground/  local Expo module (Kotlin): microphone foreground service, floating mic,
+                                Android speech recognizer fed with our PCM (LiveSpeech.kt)
 ```
 
 ## Credits

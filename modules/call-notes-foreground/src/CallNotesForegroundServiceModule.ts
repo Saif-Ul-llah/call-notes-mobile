@@ -1,7 +1,25 @@
 import { NativeModule, requireOptionalNativeModule } from 'expo'
 
+type SpeechEvent = { session: number }
+
 type Events = {
   onBubblePress(): void
+  onSpeechReady(e: SpeechEvent): void
+  onSpeechPartial(e: SpeechEvent & { text: string }): void
+  onSpeechSegment(e: SpeechEvent & { text: string }): void
+  onSpeechEnd(e: SpeechEvent): void
+  onSpeechError(e: SpeechEvent & { code: number; message: string }): void
+}
+
+export interface SpeechSupport {
+  /** the phone has a speech recognizer at all */
+  onDevice: boolean
+  /** "on-device": the dedicated offline recognizer; "default": the default service in offline mode */
+  kind?: 'on-device' | 'default'
+  installed?: string[]
+  pending?: string[]
+  supported?: string[]
+  error?: number
 }
 
 declare class CallNotesForegroundServiceModule extends NativeModule<Events> {
@@ -13,6 +31,17 @@ declare class CallNotesForegroundServiceModule extends NativeModule<Events> {
   showBubble(): Promise<boolean>
   hideBubble(): Promise<void>
   setBubbleRecording(recording: boolean): Promise<void>
+  deviceInfo(): { cores: number; memoryMb: number }
+  /** Android 13+: which offline speech languages exist / are installed */
+  speechSupport(locale: string): Promise<SpeechSupport>
+  speechDownload(locale: string): Promise<void>
+  /** starts a segmented recognition session fed by speechFeed(); returns the session id */
+  speechStart(locale: string): Promise<number>
+  /** 16 kHz mono PCM16 bytes */
+  speechFeed(pcm: Uint8Array): void
+  /** end of audio: the last segment is finished, then onSpeechEnd */
+  speechStop(): Promise<void>
+  speechCancel(): Promise<void>
 }
 
 // Android only: iOS keeps recording alive with the "audio" background mode and does not

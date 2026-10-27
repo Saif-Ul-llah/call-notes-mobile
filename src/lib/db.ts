@@ -81,7 +81,7 @@ export function createSession(s: StoredSession): void {
 
 export function updateSession(
   id: string,
-  patch: Partial<Pick<StoredSession, 'title' | 'status' | 'endedAt' | 'audioPath'>>,
+  patch: Partial<Pick<StoredSession, 'title' | 'status' | 'endedAt' | 'audioPath' | 'model'>>,
 ): void {
   const cols: string[] = []
   const vals: Array<string | number | null> = []
@@ -89,6 +89,7 @@ export function updateSession(
   if (patch.status !== undefined) { cols.push('status = ?'); vals.push(patch.status) }
   if (patch.endedAt !== undefined) { cols.push('ended_at = ?'); vals.push(patch.endedAt) }
   if (patch.audioPath !== undefined) { cols.push('audio_path = ?'); vals.push(patch.audioPath) }
+  if (patch.model !== undefined) { cols.push('model = ?'); vals.push(patch.model) }
   if (cols.length) db.runSync(`UPDATE sessions SET ${cols.join(', ')} WHERE id = ?`, [...vals, id])
 }
 
@@ -150,9 +151,11 @@ export interface MobileSettings {
   floatingMic: boolean
   /** transcript text size multiplier */
   textScale: number
+  /** "android": the phone's on-device speech recognizer when available (falls back to whisper) */
+  engine: 'android' | 'whisper'
 }
 
-const DEFAULT_SETTINGS: MobileSettings = { language: 'roman', keepAudio: true, showPartials: true, floatingMic: false, textScale: 1 }
+const DEFAULT_SETTINGS: MobileSettings = { language: 'roman', keepAudio: true, showPartials: true, floatingMic: false, textScale: 1, engine: 'android' }
 
 export function getSettings(): MobileSettings {
   const rows = db.getAllSync<{ key: string; value: string }>('SELECT key, value FROM settings')

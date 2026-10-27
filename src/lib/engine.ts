@@ -1,6 +1,8 @@
 // whisper.cpp contexts (whisper.rn) for the bundled offline models, with retry/reset.
 
+import { Platform } from 'react-native'
 import { initWhisper, initWhisperVad, type WhisperContext, type WhisperVadContext } from 'whisper.rn'
+import ForegroundService from '../../modules/call-notes-foreground'
 import { cleanTranscript } from '../shared/romanizer'
 import { backoffDelay } from '../shared/session-state'
 import { CROP_PAD_AFTER_MS, CROP_PAD_BEFORE_MS } from '../shared/models'
@@ -21,6 +23,15 @@ export interface Contexts {
   /** live previews run on their own context so they never wait behind a line */
   preview: WhisperContext
   vad: WhisperVadContext
+  /** extra contexts so two lines are transcribed at once on 8-core phones */
+  workers: WhisperContext[]
+}
+
+/** Parallel line workers beyond the first: 8 cores fit two 4-thread jobs; each context needs ~150 MB. */
+function extraWorkers(): number {
+  if (Platform.OS === 'ios') return 1
+  const info = ForegroundService?.deviceInfo()
+  return info && info.cores >= 8 && info.memoryMb >= 2500 ? 1 : 0
 }
 
 let contexts: Contexts | null = null
@@ -40,8 +51,10 @@ export function getContexts(): Promise<Contexts> {
         const whisper = await initWhisper({ filePath: MODEL_ASSET, useGpu: true })
         const preview = await initWhisper({ filePath: MODEL_ASSET, useGpu: true })
         const vad = await initWhisperVad({ filePath: VAD_ASSET, useGpu: false, nThreads: 1 })
-        contexts = { whisper, preview, vad }
-        log('info', `speech model loaded in ${Date.now() - t} ms`)
+        const workers: WhisperContext[] = []
+        for (let i = extraWorkers(); i > 0; i--) workers.push(await initWhisper({ filePath: MODEL_ASSET, useGpu: true }))
+        contexts = { whisper, preview, vad, workers }
+        log('info', `speech model loaded in ${Date.now() - t} ms (${1 + workers.length} line workers)`)
         return contexts
       } catch (err) {
         lastError = err
@@ -59,7 +72,7 @@ export function getContexts(): Promise<Contexts> {
 export async function resetContexts(): Promise<void> {
   const old = contexts
   contexts = null
-  await Promise.allSettled([old?.whisper.release(), old?.preview.release(), old?.vad.release()])
+  await Promise.allSettled([old?.whisper.release(), old?.preview.release(), old?.vad.release(), ...(old?.workers ?? []).map((w) => w.release())])
 }
 
 /**
@@ -71,7 +84,8 @@ export async function transcribePcm(pcm: ArrayBuffer, mode: LanguageMode): Promi
   const speech = await vad.detectSpeechData(pcm, { threshold: 0.5, minSpeechDurationMs: 250, minSilenceDurationMs: 100 })
   if (speech.length === 0) return { text: '', raw: '' }
   const audio = cropToSpeech(pcm, speech, CROP_PAD_BEFORE_MS, CROP_PAD_AFTER_MS)
-  const { promise } = whisper.transcribeData(audio, { ...decodeOptions(mode, 'final'), beamSize: 5, bestOf: 5 })
+  // the encoder window must cover the whole block, or whisper only hears its first seconds
+  const { promise } = whisper.transcribeData(audio, { ...decodeOptions(mode, 'final', audio.byteLength / 32), beamSize: 5, bestOf: 5 })
   const result = await promise
   return { text: cleanTranscript(result.result), raw: result.result }
 }

@@ -61,6 +61,13 @@ function RecordButton({ live, warn, busy, onPress }: { live: boolean; warn: bool
   )
 }
 
+/** Shown while the built-in model is behind, so a late line doesn't look like a lost one. */
+function Backlog() {
+  const { finalsQueued } = useDiagnostics()
+  if (finalsQueued < 3) return null
+  return <Text style={styles.message}>Catching up: {finalsQueued} lines waiting</Text>
+}
+
 const Line = memo(function Line({ seg, scale }: { seg: Segment; scale: number }) {
   const notice = seg.speaker === 'Notice'
   return (
@@ -114,7 +121,7 @@ export default function Home() {
             db.setSettings({ language: v })
           }}
         />
-        {state.message && <Text style={styles.message}>{state.message}</Text>}
+        {state.message ? <Text style={styles.message}>{state.message}</Text> : live && <Backlog />}
       </View>
 
       <RecordButton

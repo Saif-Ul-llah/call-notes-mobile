@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Alert, AppState, ScrollView, StyleSheet, Switch, Text, View } from 'react-native'
 import { requestRecordingPermissionsAsync } from 'expo-audio'
 import * as Sharing from 'expo-sharing'
@@ -7,6 +7,7 @@ import { bubbleSupported, hasOverlayPermission, openOverlayPermission, syncBubbl
 import * as db from '../lib/db'
 import { updateSettings, useSettings } from '../lib/use-settings'
 import { logFile, useDiagnostics } from '../lib/diagnostics'
+import { downloadSystemSpeech, systemSpeechStatus, systemSpeechSupported, type SystemSpeechStatus } from '../lib/system-speech'
 import { MOBILE_MODEL } from '../shared/models'
 import type { LanguageMode } from '../shared/types'
 import { RecordingBar } from '../components/RecordingBar'
@@ -130,6 +131,60 @@ function FloatingMic() {
   )
 }
 
+const PACK_STATUS: Record<SystemSpeechStatus, string> = {
+  ready: 'Offline language pack installed.',
+  downloading: 'The offline language pack is downloading. Android speech is used once it finishes.',
+  'needs-download': 'Download the offline language pack to use Android speech. Until then Call Notes uses its built-in model.',
+  unsupported: "This phone has no offline speech recognizer for this language, so Call Notes uses its built-in model.",
+}
+
+function Engine() {
+  const s = useSettings()
+  const [status, setStatus] = useState<SystemSpeechStatus | null>(null)
+  const refresh = useCallback(() => void systemSpeechStatus(s.language).then(setStatus), [s.language])
+
+  // the pack downloads in the background or in a system screen: re-check on return
+  useEffect(() => {
+    refresh()
+    const sub = AppState.addEventListener('change', (st) => st === 'active' && refresh())
+    return () => sub.remove()
+  }, [refresh])
+
+  return (
+    <Section title="Speech engine">
+      <View style={{ marginBottom: 10 }}>
+        <Segmented<db.MobileSettings['engine']>
+          value={s.engine}
+          onChange={(v) => updateSettings({ engine: v })}
+          options={[
+            { value: 'android', label: 'Android speech' },
+            { value: 'whisper', label: 'Built-in model' },
+          ]}
+        />
+      </View>
+      <Text style={styles.hint}>
+        {s.engine === 'android'
+          ? "Uses this phone's offline speech recognizer, the one behind Google voice typing. Words appear as people talk, even on budget phones. Audio stays on the phone."
+          : "Call Notes' own Hinglish model. Fully self-contained, but budget phones can fall minutes behind on long calls."}
+      </Text>
+      {s.engine === 'android' && status && (
+        <>
+          <Text style={[styles.hint, { marginTop: 10, color: status === 'ready' ? colors.ok : colors.warn }]}>{PACK_STATUS[status]}</Text>
+          {status === 'needs-download' && (
+            <Button
+              label="Download language pack"
+              onPress={() => {
+                void downloadSystemSpeech(s.language).finally(() => setTimeout(refresh, 2000))
+              }}
+              style={{ marginTop: 12 }}
+            />
+          )}
+        </>
+      )}
+    </Section>
+  )
+}
+
 const TEXT_SIZES: Array<{ value: string; label: string }> = [
   { value: '0.9', label: 'Small' },
   { value: '1', label: 'Normal' },
@@ -170,6 +225,8 @@ export default function Settings() {
         <Row label="Show words while someone is talking" hint="Turn off to save battery on older phones." value={s.showPartials} onChange={(v) => update({ showPartials: v })} />
       </Section>
 
+      {systemSpeechSupported && <Engine />}
+
       {bubbleSupported && <FloatingMic />}
 
       <Section title="Storage">
@@ -185,7 +242,8 @@ export default function Settings() {
 
       <Section title="About">
         <Text style={styles.hint}>
-          Speech model: {MOBILE_MODEL.label}, built into the app. Transcription runs entirely on this phone; no audio or text is sent anywhere.
+          Speech: Android's offline recognizer when available, otherwise {MOBILE_MODEL.label}, built into the app. Transcription runs entirely on
+          this phone; no audio or text is sent anywhere.
         </Text>
         <Text style={[styles.hint, { marginTop: 10 }]}>
           Phones don't let apps record the other side of a phone or WhatsApp call, so Call Notes listens through the microphone. Use speakerphone,
