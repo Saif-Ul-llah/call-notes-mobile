@@ -4,10 +4,15 @@
 // on low-end phones where whisper can't keep up. Android 13+, language pack required.
 //
 // Hindi comes back in Devanagari; the romanizer turns it into Roman Urdu/Hindi.
+//
+// Not every phone's recognizer accepts audio from an app: some start, then stay silent
+// (seen on a Redmi with Android 16). So each recognizer gets a trial: if ~10 s of speech
+// go in and nothing at all comes back, the next one is tried, and if none works the call
+// switches to whisper. What worked (or that nothing did) is remembered per phone.
 
 import { Platform } from 'react-native'
 import ForegroundService from '../../modules/call-notes-foreground'
-import type { SpeechSupport } from '../../modules/call-notes-foreground/src/CallNotesForegroundServiceModule'
+import type { SpeechMode, SpeechSupport } from '../../modules/call-notes-foreground/src/CallNotesForegroundServiceModule'
 import type { LanguageMode } from '../shared/types'
 import { log } from './diagnostics'
 
@@ -22,20 +27,34 @@ export function systemLocale(mode: LanguageMode): string {
 
 const sameLocale = (a: string, b: string) => a.replace('_', '-').toLowerCase() === b.toLowerCase()
 
+export type { SpeechMode }
+
+export interface SystemSpeechInfo {
+  status: SystemSpeechStatus
+  /** recognizers to try, best first */
+  modes: SpeechMode[]
+}
+
 export async function systemSpeechStatus(mode: LanguageMode): Promise<SystemSpeechStatus> {
-  if (!systemSpeechSupported) return 'unsupported'
+  return (await systemSpeechInfo(mode)).status
+}
+
+export async function systemSpeechInfo(mode: LanguageMode): Promise<SystemSpeechInfo> {
+  const none: SystemSpeechInfo = { status: 'unsupported', modes: [] }
+  if (!systemSpeechSupported) return none
   const locale = systemLocale(mode)
   try {
     const s = await ForegroundService!.speechSupport(locale)
-    if (!s.onDevice) return 'unsupported'
+    if (!s.onDevice) return none
     const status = statusOf(s, locale)
+    const modes: SpeechMode[] = s.kind === 'on-device' ? ['on-device', ...(s.hasDefault ? (['default'] as const) : [])] : ['default']
     // logged once per state change, so the shared log says why an engine was chosen
     const line = `android speech (${s.kind ?? '?'}) for ${locale}: ${status}; installed ${s.installed?.join(',') || 'none'}${s.error !== undefined ? `, check error ${s.error}` : ''}`
     if (line !== lastStatusLine) log('info', (lastStatusLine = line))
-    return status
+    return { status, modes }
   } catch (err) {
     log('warn', `on-device speech check failed: ${err}`)
-    return 'unsupported'
+    return none
   }
 }
 
@@ -61,6 +80,8 @@ export interface SystemSpeechHandlers {
   onSegment(text: string): void
   /** the recognizer can't be used: switch to whisper */
   onFatal(reason: string): void
+  /** a recognizer returned text: worth trying first next time */
+  onWorking(mode: SpeechMode): void
 }
 
 // errors that won't go away by restarting the session
@@ -68,6 +89,10 @@ const FATAL = new Set(['language-not-supported', 'language-not-downloaded', 'per
 // a quiet room ends sessions with these; restarting for them is routine
 const BENIGN = new Set(['no-match', 'speech-timeout', 'session ended'])
 const MAX_RESTARTS_PER_MINUTE = 6
+/** A recognizer that returns nothing for this much speech fed to it is considered not working. */
+const TRIAL_SPEECH_MS = 10000
+/** Audio louder than this RMS (int16, about -40 dBFS) counts as speech for the trial. */
+const SPEECH_RMS = 330
 
 /** One live recognition for a recording; restarts its native session when that ends early. */
 export class SystemSpeech {
@@ -77,25 +102,84 @@ export class SystemSpeech {
   private restarts: number[] = []
   private lastOpenAt = 0
   private subs: Array<{ remove(): void }> = []
+  private modeIndex = 0
+  /** the current recognizer has returned something (text, an empty line or an error) */
+  private answered = false
+  private speechFedMs = 0
+  private feedError = false
+  private debugSeen = new Set<string>()
 
-  constructor(private locale: string, private handlers: SystemSpeechHandlers) {}
+  constructor(private locale: string, private modes: SpeechMode[], private handlers: SystemSpeechHandlers) {}
+
+  get mode(): SpeechMode {
+    return this.modes[this.modeIndex]
+  }
 
   async start(): Promise<void> {
     const m = ForegroundService!
     this.running = true
     const mine = (e: { session: number }) => e.session === this.session
     this.subs.push(
-      m.addListener('onSpeechPartial', (e) => mine(e) && this.handlers.onPartial(e.text)),
-      m.addListener('onSpeechSegment', (e) => mine(e) && this.handlers.onSegment(e.text)),
+      m.addListener('onSpeechPartial', (e) => mine(e) && this.onText(e.text, false)),
+      m.addListener('onSpeechSegment', (e) => mine(e) && this.onText(e.text, true)),
       m.addListener('onSpeechError', (e) => mine(e) && this.onError(e.message)),
       m.addListener('onSpeechEnd', (e) => mine(e) && this.onEnd()),
+      m.addListener('onSpeechReady', (e) => mine(e) && this.debug('ready')),
+      m.addListener('onSpeechDebug', (e) => mine(e) && this.debug(e.message)),
     )
     await this.open()
-    log('info', `on-device speech started (${this.locale})`)
   }
 
   feed(pcm: Int16Array): void {
-    if (this.running) ForegroundService!.speechFeed(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength))
+    if (!this.running) return
+    try {
+      ForegroundService!.speechFeed(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength))
+    } catch (err) {
+      if (!this.feedError) log('error', `android speech: feeding audio failed: ${err}`)
+      this.feedError = true
+    }
+    if (this.answered) return
+    let sum = 0
+    for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i]
+    if (Math.sqrt(sum / Math.max(1, pcm.length)) > SPEECH_RMS) this.speechFedMs += pcm.length / 16
+    if (this.speechFedMs >= TRIAL_SPEECH_MS) void this.nextMode()
+  }
+
+  private onText(text: string, final: boolean) {
+    if (!this.answered) {
+      this.answered = true
+      log('info', `android speech (${this.mode}) is returning text`)
+      this.handlers.onWorking(this.mode)
+    }
+    if (final) this.handlers.onSegment(text)
+    else this.handlers.onPartial(text)
+  }
+
+  /** Recognizer progress, logged once per kind so a silent recognizer shows how far it got. */
+  private debug(message: string) {
+    const kind = message.replace(/\(.*\)/, '').trim()
+    if (this.debugSeen.has(kind)) return
+    this.debugSeen.add(kind)
+    log('info', `android speech (${this.mode}): ${message}`)
+  }
+
+  /** The current recognizer took ~10 s of speech and said nothing: try the next, else give up. */
+  private async nextMode() {
+    const bytes = ForegroundService!.speechBytesWritten()
+    log('warn', `android speech (${this.mode}) returned nothing for ${Math.round(this.speechFedMs / 1000)} s of speech ` +
+      `(${Math.round(bytes / 32000)} s of audio taken, progress: ${[...this.debugSeen].join(', ') || 'none'})`)
+    this.speechFedMs = 0
+    this.debugSeen.clear()
+    if (this.modeIndex + 1 >= this.modes.length) {
+      this.fatal('no recognizer on this phone returned text')
+      return
+    }
+    this.modeIndex++
+    try {
+      await this.open()
+    } catch (err) {
+      this.fatal(String(err))
+    }
   }
 
   /** Finish the last line, then release the recognizer. */
@@ -123,7 +207,8 @@ export class SystemSpeech {
 
   private async open() {
     this.lastOpenAt = Date.now()
-    this.session = await ForegroundService!.speechStart(this.locale)
+    this.session = await ForegroundService!.speechStart(this.locale, this.mode)
+    log('info', `android speech (${this.mode}) started for ${this.locale}`)
   }
 
   private onEnd() {
@@ -136,7 +221,7 @@ export class SystemSpeech {
   }
 
   private onError(message: string) {
-    log(message === 'no-match' ? 'info' : 'warn', `on-device speech: ${message}`)
+    log(message === 'no-match' ? 'info' : 'warn', `android speech (${this.mode}): ${message}`)
     if (this.stopping) {
       this.stopping()
       return

@@ -167,7 +167,15 @@ function Engine() {
           ? "Uses this phone's offline speech recognizer, the one behind Google voice typing. Words appear as people talk, even on budget phones. Audio stays on the phone."
           : "Call Notes' own Hinglish model. Fully self-contained, but budget phones can fall minutes behind on long calls."}
       </Text>
-      {s.engine === 'android' && status && (
+      {s.engine === 'android' && s.speechMode === 'none' && (
+        <>
+          <Text style={[styles.hint, { marginTop: 10, color: colors.warn }]}>
+            Android speech returned no text on this phone, so calls use the built-in model.
+          </Text>
+          <Button label="Try Android speech again" onPress={() => updateSettings({ speechMode: null })} style={{ marginTop: 12 }} />
+        </>
+      )}
+      {s.engine === 'android' && s.speechMode !== 'none' && status && (
         <>
           <Text style={[styles.hint, { marginTop: 10, color: status === 'ready' ? colors.ok : colors.warn }]}>{PACK_STATUS[status]}</Text>
           {status === 'needs-download' && (

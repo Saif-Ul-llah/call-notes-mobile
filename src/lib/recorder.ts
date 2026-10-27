@@ -32,13 +32,15 @@ import { Mic } from './mic'
 import { Slicer } from './slicer'
 import { startForegroundService, stopForegroundService, updateForegroundService } from './background'
 import { BYTES_PER_MS, gapFillBytes, tailWindows } from './wav'
-import { SystemSpeech, systemLocale, systemSpeechStatus } from './system-speech'
+import { SystemSpeech, systemLocale, systemSpeechInfo, type SpeechMode } from './system-speech'
 
 const SPEAKER = 'Speaker'
 const STALL_MS = 8000
 const MAX_ENGINE_ERRORS = 3
 /** Android speech reports a line at the pause; it began roughly this long before its first words showed. */
 const PARTIAL_LAG_MS = 1500
+/** Audio kept for whisper in case Android speech fails before returning its line. */
+const MAX_UNTRANSCRIBED_MS = 3 * 60 * 1000
 
 export interface RecorderState {
   status: SessionState
@@ -74,6 +76,9 @@ interface Active {
   speechLineStart: number | null
   /** WAV time where the last line ended */
   lastLineEnd: number
+  /** audio Android speech hasn't returned a line for yet (whisper redoes it if speech fails) */
+  untranscribed: Int16Array[]
+  untranscribedMs: number
 }
 
 let seq = 0
@@ -137,7 +142,10 @@ class Recorder {
     if (Platform.OS === 'android' && AppState.currentState === 'active') await requestNotificationPermissionsAsync().catch(() => undefined)
 
     const settings = db.getSettings()
-    const useSystem = settings.engine !== 'whisper' && (await systemSpeechStatus(settings.language)) === 'ready'
+    // remembered per phone: the recognizer that worked goes first; 'none' = none returned text
+    const info = settings.engine === 'whisper' || settings.speechMode === 'none' ? null : await systemSpeechInfo(settings.language)
+    const modes = (info?.status === 'ready' ? info.modes : []).sort((a, b) => Number(b === settings.speechMode) - Number(a === settings.speechMode))
+    const useSystem = modes.length > 0
     const now = new Date()
     const sessionId = uuid()
     const dir = newSessionDir(sessionId, now)
@@ -176,6 +184,8 @@ class Recorder {
       speech: null,
       speechLineStart: null,
       lastLineEnd: 0,
+      untranscribed: [],
+      untranscribedMs: 0,
     }
     cur.queue = new EngineQueue(
       { getContexts, decodeOptions: (kind, ms, behind) => decodeOptions(session.language, kind, ms, behind) },
@@ -201,7 +211,7 @@ class Recorder {
     }
     if (useSystem) {
       try {
-        await this.startSystemSpeech(cur)
+        await this.startSystemSpeech(cur, modes)
       } catch (err) {
         this.useWhisper(cur, `could not start: ${err}`)
       }
@@ -285,15 +295,21 @@ class Recorder {
     cur.lastDataAt = Date.now()
     if (this.state.status === 'starting' || this.state.status === 'retrying') this.onRecovered(cur)
     if (cur.speech) {
+      // kept first: feeding can end the trial and switch this call to whisper right here
+      this.keepUntranscribed(cur, pcm)
       cur.speech.feed(pcm)
       return
     }
-    if (!cur.slicer) return
+    this.slice(cur, pcm, true)
+  }
 
+  /** Slicer -> whisper queue. `live` = just recorded (not replayed), so previews make sense. */
+  private slice(cur: Active, pcm: Int16Array, live: boolean) {
+    if (!cur.slicer) return
     for (const ev of cur.slicer.push(pcm)) {
       const job: SliceJob = { startMs: cur.sliceOffsetMs + ev.startMs, endMs: cur.sliceOffsetMs + ev.endMs, pcm: ev.audio }
       if (ev.type === 'final') cur.queue.pushFinal(job)
-      else if (cur.showPartials) cur.queue.offerPartial(job)
+      else if (live && cur.showPartials) cur.queue.offerPartial(job)
     }
     if (cur.slicer.speaking !== this.lastSpeaking) {
       this.lastSpeaking = cur.slicer.speaking
@@ -314,14 +330,29 @@ class Recorder {
 
   // ---------------------------------------------------------------- Android on-device speech
 
-  private async startSystemSpeech(cur: Active): Promise<void> {
-    const speech = new SystemSpeech(systemLocale(cur.session.language), {
+  private async startSystemSpeech(cur: Active, modes: SpeechMode[]): Promise<void> {
+    const speech = new SystemSpeech(systemLocale(cur.session.language), modes, {
       onPartial: (text) => this.onSystemPartial(cur, text),
       onSegment: (text) => this.onSystemSegment(cur, text),
-      onFatal: (reason) => this.useWhisper(cur, reason),
+      onFatal: (reason) => {
+        // nothing on this phone answered: start calls on whisper from now on (Settings can retry)
+        if (reason.startsWith('no recognizer')) db.setSettings({ speechMode: 'none' })
+        this.useWhisper(cur, reason)
+      },
+      onWorking: (mode) => {
+        if (db.getSettings().speechMode !== mode) db.setSettings({ speechMode: mode })
+      },
     })
     cur.speech = speech
     await speech.start()
+  }
+
+  private keepUntranscribed(cur: Active, pcm: Int16Array) {
+    cur.untranscribed.push(pcm)
+    cur.untranscribedMs += pcm.length / 16
+    while (cur.untranscribedMs > MAX_UNTRANSCRIBED_MS && cur.untranscribed.length > 1) {
+      cur.untranscribedMs -= cur.untranscribed.shift()!.length / 16
+    }
   }
 
   private onSystemPartial(cur: Active, raw: string) {
@@ -338,6 +369,8 @@ class Recorder {
     const startMs = cur.speechLineStart ?? Math.max(cur.lastLineEnd, endMs - PARTIAL_LAG_MS)
     cur.speechLineStart = null
     cur.lastLineEnd = endMs
+    cur.untranscribed = []
+    cur.untranscribedMs = 0
     const text = cleanTranscript(raw)
     log('info', `line: ${endMs - startMs} ms audio (android speech)${text ? '' : ' (no speech)'}`)
     if (this.cur === cur) this.set({ previews: {} })
@@ -357,10 +390,14 @@ class Recorder {
     }
     this.preloadWhisper(cur)
     if (this.cur === cur) {
+      // whisper starts from where Android speech's last line ended, so no words are lost
       cur.slicer = new Slicer()
-      cur.sliceOffsetMs = cur.wav.durationMs
-      this.set({ previews: {}, message: 'Android speech stopped, so Call Notes switched to its built-in model. Lines may appear more slowly.' })
+      cur.sliceOffsetMs = cur.wav.durationMs - cur.untranscribedMs
+      for (const pcm of cur.untranscribed) this.slice(cur, pcm, false)
+      this.set({ previews: {}, message: 'Android speech gave no text on this phone, so Call Notes switched to its built-in model. Nothing was lost.' })
     }
+    cur.untranscribed = []
+    cur.untranscribedMs = 0
   }
 
   /** Load whisper while the mic starts, so the first slice doesn't wait for it. */

@@ -9,13 +9,20 @@ type Events = {
   onSpeechSegment(e: SpeechEvent & { text: string }): void
   onSpeechEnd(e: SpeechEvent): void
   onSpeechError(e: SpeechEvent & { code: number; message: string }): void
+  /** recognizer progress (ready, hearing audio, speech start/end) for the diagnostic log */
+  onSpeechDebug(e: SpeechEvent & { message: string }): void
 }
+
+/** "on-device": the dedicated offline recognizer; "default": the default recognition service, offline preferred */
+export type SpeechMode = 'on-device' | 'default'
 
 export interface SpeechSupport {
   /** the phone has a speech recognizer at all */
   onDevice: boolean
   /** "on-device": the dedicated offline recognizer; "default": the default service in offline mode */
   kind?: 'on-device' | 'default'
+  /** a default recognition service exists too (a second recognizer to try) */
+  hasDefault?: boolean
   installed?: string[]
   pending?: string[]
   supported?: string[]
@@ -36,7 +43,9 @@ declare class CallNotesForegroundServiceModule extends NativeModule<Events> {
   speechSupport(locale: string): Promise<SpeechSupport>
   speechDownload(locale: string): Promise<void>
   /** starts a segmented recognition session fed by speechFeed(); returns the session id */
-  speechStart(locale: string): Promise<number>
+  speechStart(locale: string, mode: SpeechMode): Promise<number>
+  /** bytes of audio the recognizer has taken this session */
+  speechBytesWritten(): number
   /** 16 kHz mono PCM16 bytes */
   speechFeed(pcm: Uint8Array): void
   /** end of audio: the last segment is finished, then onSpeechEnd */

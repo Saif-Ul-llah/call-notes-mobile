@@ -36,6 +36,10 @@ class LiveSpeech(
   private var source: ParcelFileDescriptor? = null
   private val writer = Executors.newSingleThreadExecutor()
   private val backlog = AtomicInteger(0)
+  /** bytes the recognizer accepted this session (diagnostics) */
+  private val written = java.util.concurrent.atomic.AtomicLong(0)
+  val bytesWritten: Long
+    get() = written.get()
   private var session = 0
 
   /**
@@ -43,12 +47,15 @@ class LiveSpeech(
    * phones); otherwise the default recognition service (Google's, on most phones), which
    * runs offline with EXTRA_PREFER_OFFLINE once the language pack is installed.
    */
-  private fun create(): SpeechRecognizer? =
-    when {
-      SpeechRecognizer.isOnDeviceRecognitionAvailable(context) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-      SpeechRecognizer.isRecognitionAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
+  private fun create(mode: String = "auto"): SpeechRecognizer? {
+    val onDevice = SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+    val hasDefault = SpeechRecognizer.isRecognitionAvailable(context)
+    return when {
+      mode != "default" && onDevice -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+      mode != "on-device" && hasDefault -> SpeechRecognizer.createSpeechRecognizer(context)
       else -> null
     }
+  }
 
   private val kind: String
     get() = if (SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) "on-device" else "default"
@@ -70,6 +77,7 @@ class LiveSpeech(
             mapOf(
               "onDevice" to true,
               "kind" to kind,
+              "hasDefault" to SpeechRecognizer.isRecognitionAvailable(context),
               "installed" to support.installedOnDeviceLanguages,
               "pending" to support.pendingOnDeviceLanguages,
               "supported" to support.supportedOnDeviceLanguages,
@@ -93,13 +101,17 @@ class LiveSpeech(
     android.os.Handler(context.mainLooper).postDelayed({ r.destroy() }, 10_000)
   }
 
-  /** Starts a new session and returns its id; events carry the id so stale ones can be ignored. */
-  fun start(locale: String): Int {
+  /**
+   * Starts a new session and returns its id; events carry the id so stale ones can be ignored.
+   * `mode`: "on-device" (dedicated offline recognizer) or "default" (default service, offline preferred).
+   */
+  fun start(locale: String, mode: String): Int {
     cancel()
     val id = ++session
     val pipe = ParcelFileDescriptor.createPipe()
     sink = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
-    val r = create() ?: throw IllegalStateException("no speech recognizer on this phone")
+    written.set(0)
+    val r = create(mode) ?: throw IllegalStateException("no $mode speech recognizer on this phone")
     r.setRecognitionListener(Listener(id))
     recognizer = r
     source = pipe[0]
@@ -116,6 +128,7 @@ class LiveSpeech(
     writer.execute {
       try {
         out.write(bytes)
+        written.addAndGet(bytes.size.toLong())
       } catch (_: IOException) {
         // pipe closed: the session ended; the JS side restarts it
       } finally {
@@ -202,11 +215,21 @@ class LiveSpeech(
       emit("onSpeechReady", mapOf("session" to id))
     }
 
-    override fun onBeginningOfSpeech() {}
-    override fun onRmsChanged(rmsdB: Float) {}
+    // the rest only feed the diagnostic log, so a silent recognizer shows how far it got
+    private var rmsSeen = false
+
+    private fun debug(what: String) = emit("onSpeechDebug", mapOf("session" to id, "message" to what))
+
+    override fun onBeginningOfSpeech() = debug("beginning of speech")
+    override fun onRmsChanged(rmsdB: Float) {
+      if (!rmsSeen) {
+        rmsSeen = true
+        debug("hearing audio (rms $rmsdB dB)")
+      }
+    }
     override fun onBufferReceived(buffer: ByteArray?) {}
-    override fun onEndOfSpeech() {}
-    override fun onEvent(eventType: Int, params: Bundle?) {}
+    override fun onEndOfSpeech() = debug("end of speech")
+    override fun onEvent(eventType: Int, params: Bundle?) = debug("event $eventType")
   }
 
   companion object {

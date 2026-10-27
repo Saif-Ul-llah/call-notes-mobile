@@ -17,7 +17,8 @@ class CallNotesForegroundServiceModule : Module() {
   private val context: Context
     get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
 
-  private var speech: LiveSpeech? = null
+  // created on the main thread, used by speechFeed() on the JS thread
+  @Volatile private var speech: LiveSpeech? = null
 
   private fun liveSpeech(): LiveSpeech? {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
@@ -27,7 +28,7 @@ class CallNotesForegroundServiceModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("CallNotesForegroundService")
 
-    Events("onBubblePress", "onSpeechReady", "onSpeechPartial", "onSpeechSegment", "onSpeechEnd", "onSpeechError")
+    Events("onBubblePress", "onSpeechReady", "onSpeechPartial", "onSpeechSegment", "onSpeechEnd", "onSpeechError", "onSpeechDebug")
 
     OnDestroy {
       speech?.cancel()
@@ -112,9 +113,13 @@ class CallNotesForegroundServiceModule : Module() {
       liveSpeech()?.download(locale)
     }.runOnQueue(Queues.MAIN)
 
-    AsyncFunction("speechStart") { locale: String ->
-      liveSpeech()?.start(locale) ?: throw IllegalStateException("on-device speech needs Android 13 or newer")
+    AsyncFunction("speechStart") { locale: String, mode: String ->
+      liveSpeech()?.start(locale, mode) ?: throw IllegalStateException("on-device speech needs Android 13 or newer")
     }.runOnQueue(Queues.MAIN)
+
+    Function("speechBytesWritten") {
+      speech?.bytesWritten ?: 0L
+    }
 
     Function("speechFeed") { pcm: Uint8Array ->
       val bytes = ByteArray(pcm.byteLength)
