@@ -113,8 +113,8 @@ class CallNotesForegroundServiceModule : Module() {
       liveSpeech()?.download(locale)
     }.runOnQueue(Queues.MAIN)
 
-    AsyncFunction("speechStart") { locale: String, mode: String ->
-      liveSpeech()?.start(locale, mode) ?: throw IllegalStateException("on-device speech needs Android 13 or newer")
+    AsyncFunction("speechStart") { locale: String, mode: String, segmented: Boolean, resume: Boolean ->
+      liveSpeech()?.start(locale, mode, segmented, resume) ?: throw IllegalStateException("on-device speech needs Android 13 or newer")
     }.runOnQueue(Queues.MAIN)
 
     Function("speechBytesWritten") {

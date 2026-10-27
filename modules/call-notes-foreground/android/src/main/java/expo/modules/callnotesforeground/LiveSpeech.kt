@@ -19,8 +19,12 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * Android's speech recognizer in offline mode (the engine behind Google voice typing),
  * fed with our own 16 kHz PCM through a pipe: the app keeps recording the WAV itself and
- * the recognizer never opens the microphone. A segmented session keeps one recognition
- * running for the whole call; every pause yields a segment result. Android 13+.
+ * the recognizer never opens the microphone. Android 13+. Two ways to run it:
+ *  - segmented: one session for the whole call, a segment result at every pause;
+ *  - classic (voice-typing style): one sentence per session. Some recognizers only work
+ *    this way (a Redmi's heard speech in segmented mode but never answered). The next
+ *    session starts with the audio fed since the previous sentence ended, so nothing said
+ *    in between is lost.
  *
  * All recognizer calls happen on the main thread; PCM is written on a background thread.
  */
@@ -36,6 +40,11 @@ class LiveSpeech(
   private var source: ParcelFileDescriptor? = null
   private val writer = Executors.newSingleThreadExecutor()
   private val backlog = AtomicInteger(0)
+  // audio fed recently (all sessions), to replay into the next classic session
+  private val recent = ArrayDeque<Pair<Long, ByteArray>>()
+  private var fedTotal = 0L
+  /** fed position where the last sentence ended (classic sessions resume from here) */
+  @Volatile private var sentenceEndAt = 0L
   /** bytes the recognizer accepted this session (diagnostics) */
   private val written = java.util.concurrent.atomic.AtomicLong(0)
   val bytesWritten: Long
@@ -105,22 +114,29 @@ class LiveSpeech(
    * Starts a new session and returns its id; events carry the id so stale ones can be ignored.
    * `mode`: "on-device" (dedicated offline recognizer) or "default" (default service, offline preferred).
    */
-  fun start(locale: String, mode: String): Int {
+  fun start(locale: String, mode: String, segmented: Boolean, resume: Boolean): Int {
     cancel()
     val id = ++session
     val pipe = ParcelFileDescriptor.createPipe()
-    sink = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
+    val out = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
+    sink = out
     written.set(0)
+    if (resume) replaySince(out, sentenceEndAt - REPLAY_OVERLAP_BYTES)
     val r = create(mode) ?: throw IllegalStateException("no $mode speech recognizer on this phone")
     r.setRecognitionListener(Listener(id))
     recognizer = r
     source = pipe[0]
-    r.startListening(intent(locale, pipe[0]))
+    r.startListening(intent(locale, pipe[0], segmented))
     return id
   }
 
   /** Queue PCM16 mono 16 kHz for the recognizer. Never blocks the JS thread. */
   fun feed(bytes: ByteArray) {
+    synchronized(recent) {
+      recent.addLast(fedTotal to bytes)
+      fedTotal += bytes.size
+      while (recent.size > 1 && fedTotal - recent.first().first > REPLAY_MAX_BYTES) recent.removeFirst()
+    }
     val out = sink ?: return
     // ~30 s of audio waiting means the recognizer stopped reading: drop instead of growing forever
     if (backlog.get() > 300) return
@@ -133,6 +149,26 @@ class LiveSpeech(
         // pipe closed: the session ended; the JS side restarts it
       } finally {
         backlog.decrementAndGet()
+      }
+    }
+  }
+
+  /** Write the fed audio from position `from` on into a new session's pipe. */
+  private fun replaySince(out: ParcelFileDescriptor.AutoCloseOutputStream, from: Long) {
+    val chunks = synchronized(recent) {
+      recent.filter { it.first + it.second.size > from }.map { (at, b) -> if (at >= from) b else b.copyOfRange((from - at).toInt(), b.size) }
+    }
+    if (chunks.isEmpty()) return
+    backlog.addAndGet(chunks.size)
+    writer.execute {
+      for (b in chunks) {
+        try {
+          out.write(b)
+          written.addAndGet(b.size.toLong())
+        } catch (_: IOException) {
+        } finally {
+          backlog.decrementAndGet()
+        }
       }
     }
   }
@@ -168,7 +204,7 @@ class LiveSpeech(
     source = null
   }
 
-  private fun intent(locale: String, audio: ParcelFileDescriptor?): Intent =
+  private fun intent(locale: String, audio: ParcelFileDescriptor?, segmented: Boolean = true): Intent =
     Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
       putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
       putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale)
@@ -180,8 +216,8 @@ class LiveSpeech(
         putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
         putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
         putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
-        // keep going until our audio ends, one result per pause
-        putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
+        // segmented: keep going until our audio ends, one result per pause
+        if (segmented) putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
       }
     }
 
@@ -208,6 +244,8 @@ class LiveSpeech(
     }
 
     override fun onError(error: Int) {
+      // nothing recognized (e.g. silence): the next session keeps only a short lead-in
+      sentenceEndAt = maxOf(sentenceEndAt, synchronized(recent) { fedTotal } - 32000L)
       emit("onSpeechError", mapOf("session" to id, "code" to error, "message" to errorName(error)))
     }
 
@@ -228,11 +266,20 @@ class LiveSpeech(
       }
     }
     override fun onBufferReceived(buffer: ByteArray?) {}
-    override fun onEndOfSpeech() = debug("end of speech")
+    override fun onEndOfSpeech() {
+      // a classic session's next one starts here (what it hadn't read yet is replayed)
+      sentenceEndAt = synchronized(recent) { fedTotal }
+      debug("end of speech")
+    }
     override fun onEvent(eventType: Int, params: Bundle?) = debug("event $eventType")
   }
 
   companion object {
+    /** 30 s of 16 kHz PCM16 kept for replay */
+    const val REPLAY_MAX_BYTES = 30 * 32000L
+    /** the recognizer may not have read the last moments before it saw the sentence end */
+    const val REPLAY_OVERLAP_BYTES = 300 * 32L
+
     fun errorName(code: Int): String =
       when (code) {
         SpeechRecognizer.ERROR_AUDIO -> "audio"

@@ -50,8 +50,11 @@ export interface QueueDeps {
   decodeOptions(kind: 'final' | 'partial', audioMs: number, behind: boolean): Record<string, unknown>
 }
 
-/** Waiting slices merged into one chunk span at most this much audio. */
-export const MERGE_MAX_MS = 15000
+/**
+ * Waiting slices merged into one chunk span at most this much audio. On the lecture eval,
+ * 10 s chunks cost about the same CPU as 15 s ones but halve how long a line waits.
+ */
+export const MERGE_MAX_MS = 10000
 /** Silence put between merged slices so words don't run together. */
 const MERGE_GAP_SAMPLES = 16 * 250
 /** With more lines than this waiting, lines are decoded greedily (~20% faster, slightly less accurate). */
@@ -166,7 +169,7 @@ export class EngineQueue {
   private async worker(whisper: WhisperLike, vad: VadLike, poolSize: number): Promise<void> {
     try {
       for (;;) {
-        // Once lines wait, take several as one chunk (on a real lecture recording ~15 s chunks
+        // Once lines wait, take several as one chunk (on a real lecture recording 10-15 s chunks
         // were both ~1.7x cheaper and more accurate than single lines), leaving a share of the
         // backlog for the other workers. Far behind, also drop beam search.
         const waiting = this.finals.length

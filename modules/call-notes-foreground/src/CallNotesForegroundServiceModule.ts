@@ -42,8 +42,12 @@ declare class CallNotesForegroundServiceModule extends NativeModule<Events> {
   /** Android 13+: which offline speech languages exist / are installed */
   speechSupport(locale: string): Promise<SpeechSupport>
   speechDownload(locale: string): Promise<void>
-  /** starts a segmented recognition session fed by speechFeed(); returns the session id */
-  speechStart(locale: string, mode: SpeechMode): Promise<number>
+  /**
+   * Starts a recognition session fed by speechFeed(); returns the session id. `segmented`: one
+   * session for the whole call; otherwise one sentence per session. `resume`: begin with the
+   * audio fed since the last sentence ended (restarting a sentence-per-session recognizer).
+   */
+  speechStart(locale: string, mode: SpeechMode, segmented: boolean, resume: boolean): Promise<number>
   /** bytes of audio the recognizer has taken this session */
   speechBytesWritten(): number
   /** 16 kHz mono PCM16 bytes */

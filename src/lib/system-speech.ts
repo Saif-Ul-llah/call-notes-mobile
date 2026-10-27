@@ -73,19 +73,40 @@ export function downloadSystemSpeech(mode: LanguageMode): Promise<void> {
   return ForegroundService?.speechDownload(systemLocale(mode)) ?? Promise.resolve()
 }
 
+/** One way to run a recognizer; remembered per phone as e.g. "on-device:sentence". */
+export interface SpeechTrial {
+  mode: SpeechMode
+  /** one session per call (true) or one per sentence, voice-typing style (false) */
+  segmented: boolean
+}
+
+export const trialKey = (t: SpeechTrial) => `${t.mode}:${t.segmented ? 'call' : 'sentence'}`
+
+/**
+ * Remembered when no way worked. Versioned: a new app version with new ways to try
+ * starts fresh instead of trusting an old "nothing works" (0.4.1 stored plain "none").
+ */
+export const NO_SPEECH = 'none:2'
+
+/** Every way to try the recognizers, best first; the one that worked before leads. */
+export function speechTrials(modes: SpeechMode[], remembered?: string | null): SpeechTrial[] {
+  const all = modes.flatMap((mode) => [{ mode, segmented: true }, { mode, segmented: false }])
+  return all.sort((a, b) => Number(trialKey(b) === remembered) - Number(trialKey(a) === remembered))
+}
+
 export interface SystemSpeechHandlers {
   /** words of the line being spoken (replaces the previous partial) */
   onPartial(text: string): void
   /** a finished line (may be empty) */
   onSegment(text: string): void
-  /** the recognizer can't be used: switch to whisper */
-  onFatal(reason: string): void
+  /** no recognizer works: switch to whisper, starting with `untranscribed` (audio since the last line) */
+  onFatal(reason: string, untranscribed: Int16Array[]): void
   /** a recognizer returned text: worth trying first next time */
-  onWorking(mode: SpeechMode): void
+  onWorking(trial: SpeechTrial): void
 }
 
-// errors that won't go away by restarting the session
-const FATAL = new Set(['language-not-supported', 'language-not-downloaded', 'permissions'])
+// errors that mean this recognizer can't work here (try the next one)
+const UNUSABLE = new Set(['language-not-supported', 'language-not-downloaded', 'permissions'])
 // a quiet room ends sessions with these; restarting for them is routine
 const BENIGN = new Set(['no-match', 'speech-timeout', 'session ended'])
 const MAX_RESTARTS_PER_MINUTE = 6
@@ -93,8 +114,10 @@ const MAX_RESTARTS_PER_MINUTE = 6
 const TRIAL_SPEECH_MS = 10000
 /** Audio louder than this RMS (int16, about -40 dBFS) counts as speech for the trial. */
 const SPEECH_RMS = 330
+/** Audio kept for a retry or for whisper in case the recognizer fails before returning its line. */
+const MAX_UNTRANSCRIBED_MS = 3 * 60 * 1000
 
-/** One live recognition for a recording; restarts its native session when that ends early. */
+/** One live recognition for a recording; restarts its native session when that ends. */
 export class SystemSpeech {
   private session = -1
   private running = false
@@ -102,17 +125,24 @@ export class SystemSpeech {
   private restarts: number[] = []
   private lastOpenAt = 0
   private subs: Array<{ remove(): void }> = []
-  private modeIndex = 0
-  /** the current recognizer has returned something (text, an empty line or an error) */
+  private index = 0
+  /** the current recognizer has returned text or a line */
   private answered = false
   private speechFedMs = 0
   private feedError = false
   private debugSeen = new Set<string>()
+  // audio since the last line: replayed into the next trial, or handed to whisper
+  private untranscribed: Int16Array[] = []
+  private untranscribedMs = 0
 
-  constructor(private locale: string, private modes: SpeechMode[], private handlers: SystemSpeechHandlers) {}
+  constructor(private locale: string, private trials: SpeechTrial[], private handlers: SystemSpeechHandlers) {}
 
-  get mode(): SpeechMode {
-    return this.modes[this.modeIndex]
+  get trial(): SpeechTrial {
+    return this.trials[this.index]
+  }
+
+  private get name() {
+    return trialKey(this.trial)
   }
 
   async start(): Promise<void> {
@@ -127,32 +157,44 @@ export class SystemSpeech {
       m.addListener('onSpeechReady', (e) => mine(e) && this.debug('ready')),
       m.addListener('onSpeechDebug', (e) => mine(e) && this.debug(e.message)),
     )
-    await this.open()
+    await this.open(false)
   }
 
   feed(pcm: Int16Array): void {
     if (!this.running) return
+    this.untranscribed.push(pcm)
+    this.untranscribedMs += pcm.length / 16
+    while (this.untranscribedMs > MAX_UNTRANSCRIBED_MS && this.untranscribed.length > 1) {
+      this.untranscribedMs -= this.untranscribed.shift()!.length / 16
+    }
+    this.send(pcm)
+    if (this.answered) return
+    let sum = 0
+    for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i]
+    if (Math.sqrt(sum / Math.max(1, pcm.length)) > SPEECH_RMS) this.speechFedMs += pcm.length / 16
+    if (this.speechFedMs >= TRIAL_SPEECH_MS) this.nextTrial('returned nothing')
+  }
+
+  private send(pcm: Int16Array) {
     try {
       ForegroundService!.speechFeed(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength))
     } catch (err) {
       if (!this.feedError) log('error', `android speech: feeding audio failed: ${err}`)
       this.feedError = true
     }
-    if (this.answered) return
-    let sum = 0
-    for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i]
-    if (Math.sqrt(sum / Math.max(1, pcm.length)) > SPEECH_RMS) this.speechFedMs += pcm.length / 16
-    if (this.speechFedMs >= TRIAL_SPEECH_MS) void this.nextMode()
   }
 
   private onText(text: string, final: boolean) {
-    if (!this.answered) {
+    if (!this.answered && (text || final)) {
       this.answered = true
-      log('info', `android speech (${this.mode}) is returning text`)
-      this.handlers.onWorking(this.mode)
+      log('info', `android speech (${this.name}) is returning text`)
+      this.handlers.onWorking(this.trial)
     }
-    if (final) this.handlers.onSegment(text)
-    else this.handlers.onPartial(text)
+    if (final) {
+      this.untranscribed = []
+      this.untranscribedMs = 0
+      this.handlers.onSegment(text)
+    } else this.handlers.onPartial(text)
   }
 
   /** Recognizer progress, logged once per kind so a silent recognizer shows how far it got. */
@@ -160,26 +202,25 @@ export class SystemSpeech {
     const kind = message.replace(/\(.*\)/, '').trim()
     if (this.debugSeen.has(kind)) return
     this.debugSeen.add(kind)
-    log('info', `android speech (${this.mode}): ${message}`)
+    log('info', `android speech (${this.name}): ${message}`)
   }
 
-  /** The current recognizer took ~10 s of speech and said nothing: try the next, else give up. */
-  private async nextMode() {
+  /** The current way didn't work: try the next one with the audio said so far, else give up. */
+  private nextTrial(why: string) {
     const bytes = ForegroundService!.speechBytesWritten()
-    log('warn', `android speech (${this.mode}) returned nothing for ${Math.round(this.speechFedMs / 1000)} s of speech ` +
+    log('warn', `android speech (${this.name}) ${why} after ${Math.round(this.speechFedMs / 1000)} s of speech ` +
       `(${Math.round(bytes / 32000)} s of audio taken, progress: ${[...this.debugSeen].join(', ') || 'none'})`)
     this.speechFedMs = 0
     this.debugSeen.clear()
-    if (this.modeIndex + 1 >= this.modes.length) {
+    if (this.index + 1 >= this.trials.length) {
       this.fatal('no recognizer on this phone returned text')
       return
     }
-    this.modeIndex++
-    try {
-      await this.open()
-    } catch (err) {
-      this.fatal(String(err))
-    }
+    this.index++
+    void this.open(false).then(
+      () => this.untranscribed.forEach((pcm) => this.send(pcm)),
+      (err) => this.fatal(String(err)),
+    )
   }
 
   /** Finish the last line, then release the recognizer. */
@@ -205,10 +246,12 @@ export class SystemSpeech {
     void ForegroundService!.speechCancel().catch(() => undefined)
   }
 
-  private async open() {
+  /** `resume`: a sentence-per-session restart, which begins with the audio since the last sentence. */
+  private async open(resume: boolean) {
     this.lastOpenAt = Date.now()
-    this.session = await ForegroundService!.speechStart(this.locale, this.mode)
-    log('info', `android speech (${this.mode}) started for ${this.locale}`)
+    const { mode, segmented } = this.trial
+    this.session = await ForegroundService!.speechStart(this.locale, mode, segmented, resume)
+    if (!resume) log('info', `android speech (${this.name}) started for ${this.locale}`)
   }
 
   private onEnd() {
@@ -216,19 +259,19 @@ export class SystemSpeech {
       this.stopping()
       return
     }
-    // the service ended the session while we're still recording: start a new one
+    // a sentence-per-session recognizer ends after every sentence; a segmented one may end early
     if (this.running) void this.restart('session ended')
   }
 
   private onError(message: string) {
-    log(message === 'no-match' ? 'info' : 'warn', `android speech (${this.mode}): ${message}`)
+    log(BENIGN.has(message) ? 'info' : 'warn', `android speech (${this.name}): ${message}`)
     if (this.stopping) {
       this.stopping()
       return
     }
     if (!this.running) return
-    if (FATAL.has(message)) {
-      this.fatal(message)
+    if (UNUSABLE.has(message)) {
+      this.nextTrial(message)
       return
     }
     void this.restart(message)
@@ -239,22 +282,26 @@ export class SystemSpeech {
     this.restarts = this.restarts.filter((t) => now - t < 60_000)
     if (!BENIGN.has(reason)) this.restarts.push(now)
     if (this.restarts.length > MAX_RESTARTS_PER_MINUTE) {
-      this.fatal(`keeps stopping (${reason})`)
+      this.nextTrial(`keeps failing (${reason})`)
       return
     }
     try {
-      // never spin: a session that ends at once is retried at most once a second
-      const wait = this.lastOpenAt + 1000 - Date.now()
+      // never spin: a session that ends at once is retried after a short pause (no audio is
+      // lost meanwhile: a sentence-per-session restart replays what it missed)
+      const wait = this.lastOpenAt + (this.trial.segmented ? 1000 : 300) - Date.now()
       if (wait > 0) await new Promise((r) => setTimeout(r, wait))
       if (!this.running) return
-      await this.open()
+      await this.open(!this.trial.segmented)
     } catch (err) {
       this.fatal(String(err))
     }
   }
 
   private fatal(reason: string) {
+    const pending = this.untranscribed
+    this.untranscribed = []
+    this.untranscribedMs = 0
     this.cancel()
-    this.handlers.onFatal(reason)
+    this.handlers.onFatal(reason, pending)
   }
 }

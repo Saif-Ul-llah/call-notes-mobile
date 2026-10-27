@@ -1,6 +1,6 @@
 {
   "name": "call-notes-mobile",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "main": "expo-router/entry",
   "dependencies": {
     "@expo-google-fonts/atkinson-hyperlegible": "^0.4.1",

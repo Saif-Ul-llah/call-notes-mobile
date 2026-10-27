@@ -7,7 +7,7 @@ import { bubbleSupported, hasOverlayPermission, openOverlayPermission, syncBubbl
 import * as db from '../lib/db'
 import { updateSettings, useSettings } from '../lib/use-settings'
 import { logFile, useDiagnostics } from '../lib/diagnostics'
-import { downloadSystemSpeech, systemSpeechStatus, systemSpeechSupported, type SystemSpeechStatus } from '../lib/system-speech'
+import { NO_SPEECH, downloadSystemSpeech, systemSpeechStatus, systemSpeechSupported, type SystemSpeechStatus } from '../lib/system-speech'
 import { MOBILE_MODEL } from '../shared/models'
 import type { LanguageMode } from '../shared/types'
 import { RecordingBar } from '../components/RecordingBar'
@@ -167,7 +167,7 @@ function Engine() {
           ? "Uses this phone's offline speech recognizer, the one behind Google voice typing. Words appear as people talk, even on budget phones. Audio stays on the phone."
           : "Call Notes' own Hinglish model. Fully self-contained, but budget phones can fall minutes behind on long calls."}
       </Text>
-      {s.engine === 'android' && s.speechMode === 'none' && (
+      {s.engine === 'android' && s.speechMode === NO_SPEECH && (
         <>
           <Text style={[styles.hint, { marginTop: 10, color: colors.warn }]}>
             Android speech returned no text on this phone, so calls use the built-in model.
@@ -175,7 +175,7 @@ function Engine() {
           <Button label="Try Android speech again" onPress={() => updateSettings({ speechMode: null })} style={{ marginTop: 12 }} />
         </>
       )}
-      {s.engine === 'android' && s.speechMode !== 'none' && status && (
+      {s.engine === 'android' && s.speechMode !== NO_SPEECH && status && (
         <>
           <Text style={[styles.hint, { marginTop: 10, color: status === 'ready' ? colors.ok : colors.warn }]}>{PACK_STATUS[status]}</Text>
           {status === 'needs-download' && (

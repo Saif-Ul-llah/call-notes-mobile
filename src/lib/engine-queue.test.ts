@@ -30,14 +30,14 @@ const vad = { detectSpeechData: async (data: ArrayBuffer) => [{ t0: 0, t1: data.
 
 describe('takeChunk', () => {
   it('merges waiting slices up to the chunk limit, with a gap between them', () => {
-    const q = [slice(0, 4000), slice(5000, 9000), slice(10000, 14000), slice(15000, 19000)]
+    const q = [slice(0, 3000), slice(3500, 6000), slice(6500, 9500), slice(10000, 13000)]
     const job = takeChunk(q)!
     expect(job.startMs).toBe(0)
-    expect(job.endMs).toBe(14000)
-    expect(job.parts).toEqual([0, 5000, 10000])
-    expect(job.pcm.length).toBe(3 * 4000 * 16 + 2 * 250 * 16)
-    expect(q.map((j) => j.startMs)).toEqual([15000])
-    expect(14000).toBeLessThanOrEqual(MERGE_MAX_MS)
+    expect(job.endMs).toBe(9500)
+    expect(job.parts).toEqual([0, 3500, 6500])
+    expect(job.pcm.length).toBe((3000 + 2500 + 3000) * 16 + 2 * 250 * 16)
+    expect(q.map((j) => j.startMs)).toEqual([10000])
+    expect(job.endMs - job.startMs).toBeLessThanOrEqual(MERGE_MAX_MS)
   })
 
   it('returns a lone slice unchanged', () => {

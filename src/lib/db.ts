@@ -153,8 +153,8 @@ export interface MobileSettings {
   textScale: number
   /** "android": the phone's on-device speech recognizer when available (falls back to whisper) */
   engine: 'android' | 'whisper'
-  /** which Android recognizer returned text on this phone; 'none' = none did (use whisper) */
-  speechMode?: 'on-device' | 'default' | 'none' | null
+  /** how Android speech returned text on this phone (e.g. "on-device:sentence"); NO_SPEECH = no way did */
+  speechMode?: string | null
 }
 
 const DEFAULT_SETTINGS: MobileSettings = { language: 'roman', keepAudio: true, showPartials: true, floatingMic: false, textScale: 1, engine: 'android' }
